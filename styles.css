@@ -92,6 +92,22 @@ input[type="range"] { width: 100%; margin-top: 8px; }
   display: flex; justify-content: space-between; align-items: center; padding: 10px 14px;
   border-bottom: 1px solid var(--border); background: rgba(12,15,22,.86); backdrop-filter: blur(12px);
 }
+.graph-edit-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(11, 16, 24, 0.86);
+}
+.inline-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 0 6px;
+  font-size: 12px;
+}
 .pill { color: var(--muted); font-size: 12px; border: 1px solid var(--border); border-radius: 999px; padding: 5px 9px; letter-spacing: .04em; text-transform: uppercase; }
 .legend { display: flex; gap: 14px; color: var(--muted); font-size: 12px; }
 .legend span { display: flex; align-items: center; gap: 8px; }
@@ -109,6 +125,14 @@ input[type="range"] { width: 100%; margin-top: 8px; }
     radial-gradient(circle at top, rgba(99,227,160,.07), transparent 45%),
     #0d1219;
   background-size: 96px 96px, 96px 96px, 24px 24px, 24px 24px, auto, auto;
+}
+.workspace.grid-minimal {
+  background:
+    linear-gradient(rgba(255,255,255,.018) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,.018) 1px, transparent 1px),
+    radial-gradient(circle at top, rgba(99,227,160,.07), transparent 45%),
+    #0d1219;
+  background-size: 96px 96px, 96px 96px, auto, auto;
 }
 .node-create-toolbar {
   position: absolute;
