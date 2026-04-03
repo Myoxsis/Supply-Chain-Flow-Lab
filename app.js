@@ -6,16 +6,20 @@ const canvasContextMenu = document.getElementById('canvasContextMenu');
 const canvasContextSearch = document.getElementById('canvasContextSearch');
 const nodeTemplate = document.getElementById('nodeTemplate');
 const selectionPanel = document.getElementById('selectionPanel');
+const sidebar = document.getElementById('sidebar');
+const sidebarToggle = document.getElementById('sidebarToggle');
+const navItems = Array.from(document.querySelectorAll('.nav-item'));
+const navPanels = Array.from(document.querySelectorAll('.nav-panel'));
 const dayValue = document.getElementById('dayValue');
 const transitValue = document.getElementById('transitValue');
 const simStatusValue = document.getElementById('simStatusValue');
 const eventLog = document.getElementById('eventLog');
 const tempWire = document.getElementById('tempWire');
+const linkInspectorTooltip = document.getElementById('linkInspectorTooltip');
 const kpiBar = document.getElementById('kpiBar');
 const inventoryChart = document.getElementById('inventoryChart');
 const shipmentChart = document.getElementById('shipmentChart');
 const analyticsNodeSelect = document.getElementById('analyticsNodeSelect');
-const globalPythonCodeEl = document.getElementById('globalPythonCode');
 const showLinkLabelsInput = document.getElementById('showLinkLabels');
 const allowWarehouseToWarehouseInput = document.getElementById('allowWarehouseToWarehouse');
 const allowPlantOutboundInput = document.getElementById('allowPlantOutbound');
@@ -832,7 +836,7 @@ function drawLinks() {
       state.selectedLinkIds = [link.id];
       state.selectedNodeIds = [];
       updateSelectionClasses();
-      renderSelection();
+      showLinkInspector(link, e.clientX, e.clientY);
     });
     linksSvg.appendChild(path);
     if (state.ui.showLinkLabels) {
@@ -847,6 +851,54 @@ function drawLinks() {
   linksSvg.appendChild(tempLinkPath);
 }
 
+function showLinkInspector(link, clientX, clientY) {
+  if (!linkInspectorTooltip) return;
+  const linkErrors = Object.values(link.validationErrors ?? {});
+  const fieldRows = LINK_SCHEMA.map((field) => {
+    const value = link[field.key] == null ? '' : link[field.key];
+    const input = field.type === 'string'
+      ? `<input type="text" data-link-field="${field.key}" value="${value}" />`
+      : `<input type="number" min="${field.min ?? 0}" step="${field.step ?? 1}" data-link-field="${field.key}" value="${value}" />`;
+    return `<label class="field"><span>${field.label}</span>${input}</label>`;
+  }).join('');
+  linkInspectorTooltip.innerHTML = `
+    <div class="selection-grid">
+      <div class="selection-row"><span>Selection</span><strong>Link</strong></div>
+      <div class="selection-row"><span>Flow type</span><strong>${link.linkType ?? 'material'}</strong></div>
+      <div class="selection-row"><span>From</span><strong>${getNode(link.from)?.name ?? 'Unknown'}</strong></div>
+      <div class="selection-row"><span>To</span><strong>${getNode(link.to)?.name ?? 'Unknown'}</strong></div>
+      <div class="selection-row"><span>Cost / shipment</span><strong>${formatLinkCost(link.costPerShipment)}</strong></div>
+    </div>
+    <div class="link-editor">${fieldRows}</div>
+    ${linkErrors.length ? `<div class="validation-block"><strong>Link validation errors</strong><ul>${linkErrors.map((error) => `<li>${error}</li>`).join('')}</ul></div>` : '<div class="validation-ok">No link validation errors.</div>'}
+  `;
+  linkInspectorTooltip.querySelectorAll('[data-link-field]').forEach((input) => {
+    input.addEventListener('input', (e) => {
+      const fieldKey = e.target.dataset.linkField;
+      const fieldSchema = LINK_SCHEMA.find((item) => item.key === fieldKey);
+      let value = e.target.value;
+      if (fieldSchema.type !== 'string') {
+        value = value.trim() === '' ? null : Number(value);
+        if (fieldSchema.type === 'int' && value != null) value = Math.trunc(value);
+      }
+      link[fieldKey] = value;
+      validateAll();
+      drawLinks();
+      showLinkInspector(link, clientX, clientY);
+    });
+  });
+  const workspaceRect = workspace.getBoundingClientRect();
+  const left = Math.max(10, Math.min(clientX - workspaceRect.left + 8, workspaceRect.width - 290));
+  const top = Math.max(10, Math.min(clientY - workspaceRect.top + 8, workspaceRect.height - 360));
+  linkInspectorTooltip.style.left = `${left}px`;
+  linkInspectorTooltip.style.top = `${top}px`;
+  linkInspectorTooltip.classList.remove('hidden');
+}
+
+function hideLinkInspector() {
+  linkInspectorTooltip?.classList.add('hidden');
+}
+
 function portCenter(el) {
   const rect = el.getBoundingClientRect();
   const wRect = workspace.getBoundingClientRect();
@@ -854,46 +906,6 @@ function portCenter(el) {
 }
 
 function renderSelection() {
-  if (state.selectedLinkIds.length === 1) {
-    const link = state.links.find((l) => l.id === state.selectedLinkIds[0]);
-    if (link) {
-      const linkErrors = Object.values(link.validationErrors ?? {});
-      const fieldRows = LINK_SCHEMA.map((field) => {
-        const value = link[field.key] == null ? '' : link[field.key];
-        const input = field.type === 'string'
-          ? `<input type="text" data-link-field="${field.key}" value="${value}" />`
-          : `<input type="number" min="${field.min ?? 0}" step="${field.step ?? 1}" data-link-field="${field.key}" value="${value}" />`;
-        return `<label class="field"><span>${field.label}</span>${input}</label>`;
-      }).join('');
-      selectionPanel.innerHTML = `
-        <div class="selection-grid">
-          <div class="selection-row"><span>Selection</span><strong>Link</strong></div>
-          <div class="selection-row"><span>Flow type</span><strong>${link.linkType ?? 'material'}</strong></div>
-          <div class="selection-row"><span>From</span><strong>${getNode(link.from)?.name ?? 'Unknown'}</strong></div>
-          <div class="selection-row"><span>To</span><strong>${getNode(link.to)?.name ?? 'Unknown'}</strong></div>
-          <div class="selection-row"><span>Cost / shipment</span><strong>${formatLinkCost(link.costPerShipment)}</strong></div>
-        </div>
-        <div class="link-editor">${fieldRows}</div>
-        ${linkErrors.length ? `<div class="validation-block"><strong>Link validation errors</strong><ul>${linkErrors.map((e) => `<li>${e}</li>`).join('')}</ul></div>` : '<div class="validation-ok">No link validation errors.</div>'}`;
-      selectionPanel.querySelectorAll('[data-link-field]').forEach((input) => {
-        input.addEventListener('input', (e) => {
-          const fieldKey = e.target.dataset.linkField;
-          const fieldSchema = LINK_SCHEMA.find((item) => item.key === fieldKey);
-          let value = e.target.value;
-          if (fieldSchema.type !== 'string') {
-            value = value.trim() === '' ? null : Number(value);
-            if (fieldSchema.type === 'int' && value != null) value = Math.trunc(value);
-          }
-          link[fieldKey] = value;
-          validateAll();
-          renderSelection();
-          drawLinks();
-        });
-      });
-      return;
-    }
-  }
-
   if (!state.selectedNodeIds.length) {
     selectionPanel.innerHTML = '<div class="empty-state">Select nodes or links to inspect them.</div>';
     return;
@@ -1541,7 +1553,6 @@ function importScenarioObject(rawScenario, options = {}) {
   clearGraph();
   state.day = Number.isInteger(scenario.day) && scenario.day >= 0 ? scenario.day : 0;
   state.globalPythonCode = typeof scenario.globalPythonCode === 'string' ? scenario.globalPythonCode : '';
-  globalPythonCodeEl.value = state.globalPythonCode;
   state.ui.showLinkLabels = Boolean(scenario.ui?.showLinkLabels);
   state.ui.allowWarehouseToWarehouse = Boolean(scenario.ui?.allowWarehouseToWarehouse);
   state.ui.allowPlantOutbound = Boolean(scenario.ui?.allowPlantOutbound);
@@ -2295,6 +2306,7 @@ function resumeSimulation() {
 
 workspace.addEventListener('pointerdown', (e) => {
   hideCanvasContextMenu();
+  if (!e.target.closest('#linkInspectorTooltip') && !e.target.closest('.link-path')) hideLinkInspector();
   const onNode = e.target.closest('.node-card');
   const onPort = e.target.closest('.port');
   if (onNode || onPort) return;
@@ -2323,8 +2335,10 @@ workspace.addEventListener('wheel', (e) => {
 }, { passive: false });
 
 workspace.addEventListener('dblclick', fitToGraph);
-workspace.addEventListener('pointerdown', () => {
+workspace.addEventListener('pointerdown', (e) => {
+  if (e.target.closest('#linkInspectorTooltip') || e.target.closest('.link-path')) return;
   state.selectedLinkIds = [];
+  hideLinkInspector();
   updateSelectionClasses();
   renderSelection();
 }, true);
@@ -2523,11 +2537,6 @@ document.getElementById('clearLogBtn').addEventListener('click', () => {
     state.logFlushHandle = null;
   }
 });
-globalPythonCodeEl.addEventListener('input', (e) => {
-  state.globalPythonCode = e.target.value;
-  persistScenarioToLocalStorage();
-});
-state.globalPythonCode = globalPythonCodeEl.value;
 setSnapToGrid(state.ui.snapToGrid);
 if (showLinkLabelsInput) {
   showLinkLabelsInput.checked = state.ui.showLinkLabels;
@@ -2557,6 +2566,22 @@ if (allowPlantOutboundInput) {
     persistScenarioToLocalStorage();
   });
 }
+if (sidebarToggle) {
+  sidebarToggle.addEventListener('click', () => {
+    const collapsed = sidebar?.classList.toggle('collapsed');
+    document.querySelector('.app-shell')?.classList.toggle('nav-open', !collapsed);
+  });
+}
+navItems.forEach((item) => {
+  item.addEventListener('click', () => {
+    navItems.forEach((nav) => nav.classList.remove('active'));
+    item.classList.add('active');
+    const panelId = item.dataset.navTarget;
+    navPanels.forEach((panel) => panel.classList.toggle('active', panel.id === panelId));
+    sidebar?.classList.remove('collapsed');
+    document.querySelector('.app-shell')?.classList.add('nav-open');
+  });
+});
 startScenarioAutosave();
 if (!loadScenarioFromLocalStorage()) {
   importScenarioObject(structuredClone(BUILT_IN_SCENARIOS.demo), { logMessage: 'Built-in demo scenario loaded' });
