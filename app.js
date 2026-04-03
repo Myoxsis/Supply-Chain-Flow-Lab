@@ -1477,6 +1477,11 @@ function updateStats() {
 }
 
 function renderAnalyticsNodeOptions() {
+  if (!analyticsNodeSelect) {
+    if (!state.nodes.length) state.analyticsNodeId = null;
+    else if (!state.nodes.some((n) => n.id === state.analyticsNodeId)) state.analyticsNodeId = state.nodes[0].id;
+    return;
+  }
   const previous = state.analyticsNodeId;
   analyticsNodeSelect.innerHTML = state.nodes
     .map((node) => `<option value="${node.id}">${node.name} (${node.type})</option>`)
@@ -1584,6 +1589,7 @@ function renderAnalyticsNodeCharts() {
 }
 
 function renderKpiBar() {
+  if (!kpiBar) return;
   const analyticsNodes = state.nodes.filter((node) => node.type === 'analytics');
   if (!analyticsNodes.length) {
     kpiBar.innerHTML = '<div class="kpi-pill" style="grid-column: 1 / -1;"><span>No analytics nodes yet</span><strong>Add an Analytics node to publish metrics.</strong></div>';
@@ -1604,6 +1610,7 @@ function renderKpiBar() {
 }
 
 function renderInventoryChart() {
+  if (!inventoryChart) return;
   const nodeId = state.analyticsNodeId;
   const history = nodeId ? (state.inventoryHistoryByNode[nodeId] ?? []) : [];
   const stockoutsForNode = state.stockoutEvents.filter((event) => event.nodeId === nodeId);
@@ -1617,6 +1624,7 @@ function renderInventoryChart() {
 }
 
 function renderShipmentChart() {
+  if (!shipmentChart) return;
   drawLineChart(shipmentChart, {
     points: state.shipmentsByDay.map((pt) => ({ x: pt.day, y: pt.count })),
     className: 'shipments',
@@ -1626,6 +1634,7 @@ function renderShipmentChart() {
 }
 
 function drawLineChart(svg, config) {
+  if (!svg) return;
   const width = 640;
   const height = 180;
   const pad = { top: 12, right: 14, bottom: 24, left: 34 };
@@ -1720,7 +1729,7 @@ function selectNodes(nodeIds, options = {}) {
   state.selectedNodeIds = [...new Set(nodeIds)];
   if (state.selectedNodeIds.length === 1) {
     state.analyticsNodeId = state.selectedNodeIds[0];
-    analyticsNodeSelect.value = state.analyticsNodeId;
+    if (analyticsNodeSelect) analyticsNodeSelect.value = state.analyticsNodeId;
   }
   if (!options.keepLinks) state.selectedLinkIds = [];
   updateSelectionClasses();
@@ -2281,10 +2290,12 @@ if (tickSpeedInput) {
     if (state.simulation.status === 'running') scheduleNextSimulationTick();
   });
 }
-analyticsNodeSelect.addEventListener('change', (e) => {
-  state.analyticsNodeId = e.target.value;
-  renderInventoryChart();
-});
+if (analyticsNodeSelect) {
+  analyticsNodeSelect.addEventListener('change', (e) => {
+    state.analyticsNodeId = e.target.value;
+    renderInventoryChart();
+  });
+}
 document.getElementById('clearLogBtn').addEventListener('click', () => {
   eventLog.innerHTML = '';
   state.eventLog = [];
