@@ -391,6 +391,19 @@ input[type="range"] { width: 100%; margin-top: 8px; }
 .node-card:hover .port, .port:hover { transform: translateY(-50%) scale(1.12); box-shadow: 0 0 0 2px rgba(255,255,255,.11), 0 0 0 6px rgba(99,227,160,.12); }
 .in-port { left: -7px; background: #7f8b9d; }
 .out-port { right: -7px; background: var(--accent); }
+.out-port-material { top: calc(50% - 11px); }
+.out-port-information { top: calc(50% + 11px); background: #c392ff; }
+.out-port::after {
+  content: attr(data-port-label);
+  position: absolute;
+  right: 18px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 10px;
+  line-height: 1;
+  color: var(--muted);
+  white-space: nowrap;
+}
 .delete-node {
   width: 24px; height: 24px; padding: 0; border-radius: 8px; color: var(--danger); background: #141b25;
 }
