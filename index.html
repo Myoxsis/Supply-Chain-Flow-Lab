@@ -20,10 +20,10 @@
       <section class="panel">
         <h2>Build</h2>
         <div class="button-grid">
-          <button id="addSupplier">+ Supplier</button>
-          <button id="addWarehouse">+ Warehouse</button>
-          <button id="addPlant">+ Plant</button>
-          <button id="addAnalytics">+ Analytics</button>
+          <button id="addSupplier" data-create-node="supplier">+ Supplier</button>
+          <button id="addWarehouse" data-create-node="warehouse">+ Warehouse</button>
+          <button id="addPlant" data-create-node="plant">+ Plant</button>
+          <button id="addAnalytics" data-create-node="analytics">+ Analytics</button>
           <button id="clearLinks" class="ghost">Clear Links</button>
         </div>
       </section>
@@ -133,18 +133,20 @@ def clamp(value, min_value, max_value):
 
       <section id="workspace" class="workspace">
         <div id="nodeCreateToolbar" class="node-create-toolbar">
-          <button class="toolbar-action" data-node-type="supplier">+ Supplier</button>
-          <button class="toolbar-action" data-node-type="warehouse">+ Warehouse</button>
-          <button class="toolbar-action" data-node-type="plant">+ Plant</button>
+          <button class="toolbar-action" data-create-node="supplier">+ Supplier</button>
+          <button class="toolbar-action" data-create-node="warehouse">+ Warehouse</button>
+          <button class="toolbar-action" data-create-node="plant">+ Plant</button>
+          <button class="toolbar-action" data-create-node="analytics">+ Analytics</button>
         </div>
         <svg id="linksSvg" class="links" aria-hidden="true"></svg>
         <div id="tempWire" class="temp-wire-label hidden">Linking...</div>
         <div id="canvasContextMenu" class="canvas-context-menu hidden" role="menu" aria-label="Canvas actions">
           <input id="canvasContextSearch" type="search" placeholder="Filter actions..." aria-label="Filter canvas actions" />
           <div class="canvas-context-actions">
-            <button class="context-action" data-node-type="supplier" role="menuitem">Add Supplier</button>
-            <button class="context-action" data-node-type="warehouse" role="menuitem">Add Warehouse</button>
-            <button class="context-action" data-node-type="plant" role="menuitem">Add Plant</button>
+            <button class="context-action" data-node-type="supplier" data-create-node="supplier" role="menuitem">Add Supplier</button>
+            <button class="context-action" data-node-type="warehouse" data-create-node="warehouse" role="menuitem">Add Warehouse</button>
+            <button class="context-action" data-node-type="plant" data-create-node="plant" role="menuitem">Add Plant</button>
+            <button class="context-action" data-node-type="analytics" data-create-node="analytics" role="menuitem">Add Analytics</button>
           </div>
           <p class="context-empty hidden">No actions match.</p>
         </div>

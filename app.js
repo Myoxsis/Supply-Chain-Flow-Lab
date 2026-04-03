@@ -2450,18 +2450,21 @@ window.addEventListener('keyup', (e) => {
   }
 });
 
-document.getElementById('addSupplier').addEventListener('click', () => addNode('supplier'));
-document.getElementById('addWarehouse').addEventListener('click', () => addNode('warehouse'));
-document.getElementById('addPlant').addEventListener('click', () => addNode('plant'));
-document.getElementById('addAnalytics').addEventListener('click', () => addNode('analytics'));
-if (nodeCreateToolbar) {
-  nodeCreateToolbar.querySelectorAll('[data-node-type]').forEach((button) => {
-    button.addEventListener('click', (e) => {
-      const type = e.currentTarget.dataset.nodeType;
+document.querySelectorAll('[data-create-node]').forEach((button) => {
+  button.addEventListener('click', (e) => {
+    const type = e.currentTarget.dataset.createNode;
+    if (!type) return;
+    if (e.currentTarget.classList.contains('context-action')) {
+      addNodeFromContext(type);
+      return;
+    }
+    if (e.currentTarget.closest('#nodeCreateToolbar')) {
       addNode(type, 48 + state.nodes.length * 18, 48 + state.nodes.length * 14);
-    });
+      return;
+    }
+    addNode(type);
   });
-}
+});
 if (toggleCreateToolbarBtn) {
   toggleCreateToolbarBtn.addEventListener('click', () => {
     setCreateToolbarVisibility(!state.ui.showCreateToolbar);
@@ -2480,21 +2483,13 @@ snapToGridInput?.addEventListener('change', (e) => {
   setSnapToGrid(e.target.checked);
   persistScenarioToLocalStorage();
 });
-if (canvasContextActions) {
-  canvasContextActions.querySelectorAll('.context-action').forEach((button) => {
-    button.addEventListener('click', (e) => {
-      const type = e.currentTarget.dataset.nodeType;
-      addNodeFromContext(type);
-    });
-  });
-}
 canvasContextSearch?.addEventListener('input', updateContextMenuFilter);
 canvasContextSearch?.addEventListener('keydown', (e) => {
   if (e.key !== 'Enter') return;
   const firstVisible = canvasContextActions?.querySelector('.context-action:not(.hidden)');
   if (!firstVisible) return;
   e.preventDefault();
-  addNodeFromContext(firstVisible.dataset.nodeType);
+  addNodeFromContext(firstVisible.dataset.createNode);
 });
 document.getElementById('clearLinks').addEventListener('click', () => {
   state.links = [];
