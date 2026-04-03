@@ -5,6 +5,8 @@ What is included
 - index.html
 - styles.css
 - app.js
+- src/graph-model.js
+- src/simulation-engine.js
 
 How to run
 1. Unzip the folder.
@@ -36,13 +38,26 @@ What this draft does
   - Built-in presets: Blank + Demo.
   - Versioned scenario schema with migration hooks.
 
+Architecture notes
+- `app.js` is now primarily the orchestration layer:
+  - canvas rendering
+  - interaction/controller events
+  - inspector/forms wiring
+  - persistence UI triggers
+- `src/graph-model.js` owns graph schema/model concerns:
+  - node + link schemas
+  - finance/cost model primitives
+  - scenario migration + normalization helpers
+- `src/simulation-engine.js` owns pure day-step simulation behavior and can run without DOM access.
+
 Scenario JSON versioning strategy
-- Current version: `4`.
+- Current version: `5`.
 - `migrateScenario()` upgrades old payloads to the latest format before import.
 - Version migration rules currently include:
   - v1 → v2: adds `globalPythonCode`, `ui`, and fills missing link fields with defaults.
   - v2 → v3: normalizes UI flags (`showLinkLabels`, `allowWarehouseToWarehouse`, `allowPlantOutbound`).
   - v3 → v4: adds warehouse `preparationCapacityPerDay` (optional, defaults to unlimited).
+  - v4 → v5: adds cost fields (`shipmentCost`, `handlingCostPerUnit`, `storageCostPerUnitPerDay`, `stockoutPenaltyPerUnit`).
 - Future versions should add a new migration branch and keep previous branches intact for backward compatibility.
 
 Keyboard shortcuts
@@ -60,3 +75,7 @@ State format changes
 Notes
 - This is a front-end prototype, not a production scheduler.
 - The visual style is inspired by node-editor tools like ComfyUI, but it is an original implementation.
+- Remaining technical debt:
+  - `app.js` still contains both rendering and interaction code in one file.
+  - analytics metric computation and rendering are still tightly coupled to `app.js`.
+  - no automated regression test suite yet (manual behavior verification required).
