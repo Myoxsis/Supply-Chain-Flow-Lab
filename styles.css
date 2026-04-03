@@ -97,6 +97,12 @@ input[type="range"] { width: 100%; margin-top: 8px; }
   display: grid;
   gap: 8px;
 }
+.node-package-folder-title {
+  font-size: 11px;
+  letter-spacing: .08em;
+  text-transform: uppercase;
+  color: #9fb0c9;
+}
 .node-package-item {
   border: 1px solid #2f3a4d;
   border-radius: 10px;
