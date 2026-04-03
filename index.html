@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Supply Chain Flow Lab</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar">
+      <div class="brand">
+        <div class="brand-mark">SC</div>
+        <div>
+          <h1>Supply Chain Flow Lab</h1>
+          <p>ComfyUI-inspired node simulator</p>
+        </div>
+      </div>
+
+      <section class="panel">
+        <h2>Build</h2>
+        <div class="button-grid">
+          <button id="addSupplier">+ Supplier</button>
+          <button id="addWarehouse">+ Warehouse</button>
+          <button id="addPlant">+ Plant</button>
+          <button id="clearLinks" class="ghost">Clear Links</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Simulation</h2>
+        <div class="button-grid sim-grid">
+          <button id="stepBtn">Step +1 day</button>
+          <button id="playBtn">Auto Play</button>
+          <button id="pauseBtn" class="ghost">Pause</button>
+          <button id="resetBtn" class="ghost">Reset</button>
+        </div>
+        <label>
+          Tick speed
+          <input id="tickSpeed" type="range" min="200" max="1500" step="100" value="800" />
+        </label>
+        <div class="stats-row">
+          <div>
+            <span class="meta-label">Day</span>
+            <strong id="dayValue">0</strong>
+          </div>
+          <div>
+            <span class="meta-label">In transit</span>
+            <strong id="transitValue">0</strong>
+          </div>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>How it works</h2>
+        <ul>
+          <li>Drag nodes around the canvas.</li>
+          <li>Click an output port, then an input port, to create a link.</li>
+          <li>Suppliers ship every <strong>delivery frequency</strong> days.</li>
+          <li>Plants consume inventory each day using <strong>consumption rate</strong>.</li>
+          <li>Warehouses dispatch to plants after <strong>prep + delivery</strong> days.</li>
+        </ul>
+      </section>
+
+      <section class="panel">
+        <h2>Selected node</h2>
+        <div id="selectionPanel" class="empty-state">Select a node to inspect it.</div>
+      </section>
+    </aside>
+
+    <main class="workspace-shell">
+      <header class="workspace-topbar">
+        <div class="pill">Node canvas</div>
+        <div class="legend">
+          <span><i class="dot supplier"></i>Supplier</span>
+          <span><i class="dot warehouse"></i>Warehouse</span>
+          <span><i class="dot plant"></i>Plant</span>
+        </div>
+      </header>
+
+      <section id="workspace" class="workspace">
+        <svg id="linksSvg" class="links"></svg>
+        <div id="tempWire" class="temp-wire-label hidden">Linking...</div>
+      </section>
+
+      <footer class="event-log-wrap">
+        <div class="log-header">
+          <h3>Event Log</h3>
+          <button id="clearLogBtn" class="ghost small">Clear log</button>
+        </div>
+        <div id="eventLog" class="event-log"></div>
+      </footer>
+    </main>
+  </div>
+
+  <template id="nodeTemplate">
+    <article class="node-card">
+      <div class="node-header">
+        <div class="node-title-wrap">
+          <span class="node-type-chip"></span>
+          <input class="node-title" />
+        </div>
+        <button class="delete-node" title="Delete node">×</button>
+      </div>
+      <div class="node-body"></div>
+      <div class="port in-port" data-port="in"></div>
+      <div class="port out-port" data-port="out"></div>
+    </article>
+  </template>
+
+  <script src="app.js"></script>
+</body>
+</html>
