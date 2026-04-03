@@ -573,6 +573,24 @@ function hasValidationErrors() {
     || state.graphErrors.length > 0;
 }
 
+function collectValidationIssues() {
+  const issues = [];
+  state.nodes.forEach((node) => {
+    Object.values(node.validationErrors ?? {}).forEach((message) => {
+      issues.push({ kind: 'node', id: node.id, message });
+    });
+  });
+  state.links.forEach((link) => {
+    Object.values(link.validationErrors ?? {}).forEach((message) => {
+      issues.push({ kind: 'link', id: link.id, message });
+    });
+  });
+  state.graphErrors.forEach((message) => {
+    issues.push({ kind: 'graph', id: 'graph', message });
+  });
+  return issues;
+}
+
 function createLinkData() {
   return LINK_SCHEMA.reduce((acc, field) => {
     acc[field.key] = typeof field.defaultValue === 'function' ? field.defaultValue() : field.defaultValue;
@@ -994,8 +1012,30 @@ function renderSelection() {
 function canRunSimulation() {
   validateAll();
   if (!hasValidationErrors()) return true;
-  log('Simulation blocked: resolve validation errors first.');
+  const issues = collectValidationIssues();
+  const issueSummary = issues.length ? `${issues.length} issue${issues.length > 1 ? 's' : ''}` : 'validation issues';
+  log(`Simulation blocked: resolve ${issueSummary} first.`);
+  issues.slice(0, 5).forEach((issue, idx) => {
+    const prefix = issue.kind === 'node'
+      ? `Node ${issue.id}`
+      : issue.kind === 'link'
+        ? `Link ${issue.id}`
+        : 'Graph';
+    log(`Validation ${idx + 1}: ${prefix} — ${issue.message}`);
+  });
+  if (issues.length > 5) {
+    log(`Validation: ${issues.length - 5} additional issue${issues.length - 5 > 1 ? 's' : ''} not shown in log.`);
+  }
   setSimulationStatus('paused');
+  const firstInvalidNode = state.nodes.find((node) => Object.keys(node.validationErrors ?? {}).length);
+  const firstInvalidLink = state.links.find((link) => Object.keys(link.validationErrors ?? {}).length);
+  if (firstInvalidNode) {
+    selectNodes([firstInvalidNode.id]);
+  } else if (firstInvalidLink) {
+    state.selectedNodeIds = [];
+    state.selectedLinkIds = [firstInvalidLink.id];
+    updateSelectionClasses();
+  }
   renderSelection();
   state.nodes.forEach((n) => refreshNode(n.id));
   return false;
