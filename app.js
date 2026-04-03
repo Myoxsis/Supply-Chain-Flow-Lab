@@ -36,6 +36,10 @@ const alignTopBtn = document.getElementById('alignTopBtn');
 const alignBottomBtn = document.getElementById('alignBottomBtn');
 const distributeHorizontalBtn = document.getElementById('distributeHorizontalBtn');
 const distributeVerticalBtn = document.getElementById('distributeVerticalBtn');
+const importNodePackageBtn = document.getElementById('importNodePackageBtn');
+const exportNodePackageBtn = document.getElementById('exportNodePackageBtn');
+const importNodePackageInput = document.getElementById('importNodePackageInput');
+const nodePackageList = document.getElementById('nodePackageList');
 const canvasContextActions = canvasContextMenu?.querySelector('.canvas-context-actions');
 const canvasContextEmpty = canvasContextMenu?.querySelector('.context-empty');
 const tempLinkPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
@@ -50,7 +54,7 @@ const MIN_ZOOM = 0.35;
 const MAX_ZOOM = 2.5;
 const GRID_SIZE = 24;
 const SCENARIO_STORAGE_KEY = 'supply-chain-flow-lab:scenario';
-const SCENARIO_VERSION = 5;
+const SCENARIO_VERSION = 6;
 
 const NODE_SCHEMAS = {
   supplier: {
@@ -111,6 +115,7 @@ const NODE_SCHEMAS = {
     ],
   },
 };
+const CORE_NODE_TYPES = Object.keys(NODE_SCHEMAS);
 
 const state = {
   nodes: [],
@@ -174,6 +179,10 @@ const state = {
   },
   contextCreateAt: null,
   clipboard: null,
+  nodePackage: {
+    name: 'SCFL-node',
+    customNodes: [],
+  },
 };
 
 const LINK_SCHEMA = [
@@ -240,7 +249,7 @@ const BUILT_IN_SCENARIOS = {
 };
 
 function createNodeData(type) {
-  const schema = NODE_SCHEMAS[type];
+  const schema = getNodeSchema(type);
   const data = {};
   schema.fields.forEach((field) => {
     const raw = typeof field.defaultValue === 'function' ? field.defaultValue(state.nodeCounter) : field.defaultValue;
@@ -249,7 +258,51 @@ function createNodeData(type) {
   return data;
 }
 
+function getNodeSchema(type) {
+  const custom = state.nodePackage.customNodes.find((node) => node.type === type);
+  return custom?.schema ?? NODE_SCHEMAS[type] ?? null;
+}
+
+function getCreatableNodeTypes() {
+  const customEnabled = state.nodePackage.customNodes.filter((node) => node.enabled).map((node) => node.type);
+  return [...CORE_NODE_TYPES, ...customEnabled];
+}
+
+function refreshNodeCreationActions() {
+  const types = getCreatableNodeTypes();
+  if (nodeCreateToolbar) {
+    nodeCreateToolbar.innerHTML = types
+      .filter((type) => type !== 'analytics')
+      .map((type) => {
+        const schema = getNodeSchema(type);
+        return `<button class="toolbar-action" data-node-type="${type}">+ ${schema?.label ?? type}</button>`;
+      })
+      .join('');
+    nodeCreateToolbar.querySelectorAll('[data-node-type]').forEach((button) => {
+      button.addEventListener('click', (e) => {
+        const type = e.currentTarget.dataset.nodeType;
+        addNode(type, 48 + state.nodes.length * 18, 48 + state.nodes.length * 14);
+      });
+    });
+  }
+  if (canvasContextActions) {
+    canvasContextActions.innerHTML = types
+      .map((type) => {
+        const schema = getNodeSchema(type);
+        return `<button class="context-action" data-node-type="${type}" role="menuitem">Add ${schema?.label ?? type}</button>`;
+      })
+      .join('');
+    canvasContextActions.querySelectorAll('.context-action').forEach((button) => {
+      button.addEventListener('click', (e) => {
+        const type = e.currentTarget.dataset.nodeType;
+        addNodeFromContext(type);
+      });
+    });
+  }
+}
+
 function addNode(type, x = 80 + state.nodes.length * 40, y = 60 + state.nodes.length * 30) {
+  if (!getNodeSchema(type)) return;
   const position = snapPosition(x, y);
   const data = createNodeData(type);
   const id = `node-${state.nodeCounter++}`;
@@ -286,7 +339,7 @@ function addNodeFromContext(type) {
 function resolveInitialInventory(type, data) {
   if (type === 'supplier') return data.initialInventory == null ? Infinity : data.initialInventory;
   if (type === 'analytics') return 0;
-  return data.initialInventory;
+  return Number.isFinite(data.initialInventory) ? data.initialInventory : 0;
 }
 
 function initializeNodeRuntime(node) {
@@ -348,9 +401,10 @@ function renderNode(node) {
 function configureNodePorts(node, el) {
   const materialPort = el.querySelector('.out-port-material');
   const informationPort = el.querySelector('.out-port-information');
-  const supportsDualOutput = ['supplier', 'warehouse', 'plant'].includes(node.type);
-  if (materialPort) materialPort.classList.toggle('hidden', !supportsDualOutput);
-  if (informationPort) informationPort.classList.toggle('hidden', !(supportsDualOutput || node.type === 'analytics'));
+  const schema = getNodeSchema(node.type);
+  const outputs = schema?.outputs ?? (['supplier', 'warehouse', 'plant'].includes(node.type) ? ['material', 'information'] : ['information']);
+  if (materialPort) materialPort.classList.toggle('hidden', !outputs.includes('material'));
+  if (informationPort) informationPort.classList.toggle('hidden', !outputs.includes('information'));
 }
 
 function getFieldError(node, fieldKey) {
@@ -358,7 +412,7 @@ function getFieldError(node, fieldKey) {
 }
 
 function getNodeBody(node) {
-  const schema = NODE_SCHEMAS[node.type];
+  const schema = getNodeSchema(node.type);
   const fieldsHtml = schema.fields
     .filter((f) => f.key !== 'name')
     .map((field) => {
@@ -411,14 +465,19 @@ function getNodeBody(node) {
       </div>`
     : '';
 
-  return `${fieldsHtml}${analyticsGraph}${commonKpis[node.type]}`;
+  const fallbackKpi = `
+    <div class="kpis">
+      <div class="kpi"><span class="label">Type</span><span class="value">${schema.label}</span></div>
+      <div class="kpi"><span class="label">Shipped</span><span class="value" data-kpi="shipped">${node.shipped}</span></div>
+    </div>`;
+  return `${fieldsHtml}${analyticsGraph}${commonKpis[node.type] ?? fallbackKpi}`;
 }
 
 function bindFieldEvents(body, node) {
   body.querySelectorAll('[data-field]').forEach((input) => {
     input.addEventListener('input', (e) => {
       const field = e.target.dataset.field;
-      const fieldSchema = NODE_SCHEMAS[node.type].fields.find((item) => item.key === field);
+      const fieldSchema = getNodeSchema(node.type).fields.find((item) => item.key === field);
       const raw = e.target.value;
       let value = raw;
       if (fieldSchema?.type === 'int') {
@@ -438,7 +497,7 @@ function bindFieldEvents(body, node) {
 }
 
 function validateNode(node) {
-  const schema = NODE_SCHEMAS[node.type];
+  const schema = getNodeSchema(node.type);
   const errors = {};
   schema.fields.forEach((field) => {
     const value = node[field.key];
@@ -803,9 +862,12 @@ function tryCreateLink(fromId, toId, linkType = 'material') {
 
 function isValidLink(from, to, linkType = 'material') {
   const normalizedLinkType = linkType === 'information' ? 'information' : 'material';
+  const fromOutputs = getNodeSchema(from.type)?.outputs ?? [];
   if (normalizedLinkType === 'information') {
-    return to.type === 'analytics' && ['supplier', 'warehouse', 'plant'].includes(from.type);
+    if (!fromOutputs.includes('information')) return false;
+    return to.type === 'analytics' || to.type.startsWith('scfl_custom_');
   }
+  if (!fromOutputs.includes('material')) return false;
   if (from.type === 'plant' && !state.ui.allowPlantOutbound) return false;
   if (from.type === 'supplier' && (to.type === 'warehouse' || to.type === 'plant')) return true;
   if (from.type === 'warehouse' && to.type === 'plant') return true;
@@ -1452,7 +1514,7 @@ function clearGraph() {
 function normalizeNodeConfig(type, config = {}, sequence = 1) {
   const defaults = createNodeData(type);
   const normalized = {};
-  NODE_SCHEMAS[type].fields.forEach((field) => {
+  getNodeSchema(type).fields.forEach((field) => {
     const raw = config[field.key];
     if (field.type === 'string' || field.type === 'text' || field.type === 'select') {
       normalized[field.key] = raw == null ? defaults[field.key] : String(raw);
@@ -1465,7 +1527,7 @@ function normalizeNodeConfig(type, config = {}, sequence = 1) {
     const numeric = Number(raw);
     normalized[field.key] = Number.isFinite(numeric) ? numeric : (field.required ? defaults[field.key] : null);
   });
-  if (!normalized.name) normalized.name = `${NODE_SCHEMAS[type].label} ${sequence}`;
+  if (!normalized.name) normalized.name = `${getNodeSchema(type).label} ${sequence}`;
   return normalized;
 }
 
@@ -1529,8 +1591,88 @@ function migrateScenario(rawScenario) {
     snapToGrid: Boolean(migrated.ui?.snapToGrid),
   };
 
+  migrated.nodePackage = migrated.nodePackage ?? { name: 'SCFL-node', customNodes: [] };
+  migrated.nodePackage.name = 'SCFL-node';
+  migrated.nodePackage.customNodes = Array.isArray(migrated.nodePackage.customNodes) ? migrated.nodePackage.customNodes : [];
+
   migrated.version = SCENARIO_VERSION;
   return migrated;
+}
+
+function normalizeCustomNodeDefinition(rawNode, idx = 1) {
+  if (!rawNode || typeof rawNode !== 'object') throw new Error(`Node entry #${idx} must be an object.`);
+  const suffix = String(rawNode.type ?? `node_${idx}`).toLowerCase().replace(/[^a-z0-9_]+/g, '_');
+  const type = `scfl_custom_${suffix}`;
+  const label = String(rawNode.label ?? rawNode.name ?? `Custom ${idx}`).trim() || `Custom ${idx}`;
+  const rawFields = Array.isArray(rawNode.fields) ? rawNode.fields : [];
+  const fields = [
+    { key: 'name', label: 'Name', type: 'string', required: true, defaultValue: (i) => `${label} ${i}` },
+    ...rawFields.map((field, fieldIdx) => ({
+      key: String(field.key ?? `field_${fieldIdx + 1}`).replace(/[^a-zA-Z0-9_]/g, '_'),
+      label: String(field.label ?? field.key ?? `Field ${fieldIdx + 1}`),
+      type: field.type === 'select' ? 'select' : (field.type === 'text' ? 'text' : (field.type === 'string' ? 'string' : 'int')),
+      required: field.required !== false,
+      min: Number.isFinite(Number(field.min)) ? Number(field.min) : 0,
+      step: Number.isFinite(Number(field.step)) ? Number(field.step) : 1,
+      defaultValue: field.defaultValue ?? null,
+      options: Array.isArray(field.options) ? field.options.map((option) => ({
+        value: String(option.value ?? ''),
+        label: String(option.label ?? option.value ?? ''),
+      })) : [],
+    })),
+  ];
+  const outputs = Array.isArray(rawNode.outputs) && rawNode.outputs.length
+    ? rawNode.outputs.filter((output) => output === 'material' || output === 'information')
+    : ['information'];
+  return {
+    type,
+    label,
+    description: String(rawNode.description ?? ''),
+    enabled: rawNode.enabled !== false,
+    schema: { label, fields, outputs: outputs.length ? outputs : ['information'] },
+  };
+}
+
+function renderNodePackageList() {
+  if (!nodePackageList) return;
+  const installed = state.nodePackage.customNodes;
+  if (!installed.length) {
+    nodePackageList.innerHTML = 'No community nodes installed.';
+    return;
+  }
+  nodePackageList.innerHTML = installed.map((node) => `
+    <div class="node-package-item">
+      <div class="node-package-row">
+        <div>
+          <strong>${node.schema.label}</strong>
+          <small>${node.type} · ${node.description || 'No description'}</small>
+        </div>
+        <div class="node-package-actions">
+          <label><input type="checkbox" data-custom-node-toggle="${node.type}" ${node.enabled ? 'checked' : ''} /> enabled</label>
+          <button class="ghost small" data-custom-node-remove="${node.type}">Remove</button>
+        </div>
+      </div>
+    </div>
+  `).join('');
+
+  nodePackageList.querySelectorAll('[data-custom-node-toggle]').forEach((input) => {
+    input.addEventListener('change', (e) => {
+      const node = state.nodePackage.customNodes.find((item) => item.type === e.currentTarget.dataset.customNodeToggle);
+      if (!node) return;
+      node.enabled = e.currentTarget.checked;
+      refreshNodeCreationActions();
+      persistScenarioToLocalStorage();
+    });
+  });
+  nodePackageList.querySelectorAll('[data-custom-node-remove]').forEach((button) => {
+    button.addEventListener('click', (e) => {
+      const type = e.currentTarget.dataset.customNodeRemove;
+      state.nodePackage.customNodes = state.nodePackage.customNodes.filter((node) => node.type !== type);
+      refreshNodeCreationActions();
+      renderNodePackageList();
+      persistScenarioToLocalStorage();
+    });
+  });
 }
 
 function importScenarioObject(rawScenario, options = {}) {
@@ -1547,10 +1689,24 @@ function importScenarioObject(rawScenario, options = {}) {
   state.ui.allowPlantOutbound = Boolean(scenario.ui?.allowPlantOutbound);
   state.ui.showCreateToolbar = scenario.ui?.showCreateToolbar !== false;
   state.ui.snapToGrid = Boolean(scenario.ui?.snapToGrid);
+  state.nodePackage = { name: 'SCFL-node', customNodes: [] };
+  (scenario.nodePackage?.customNodes ?? []).forEach((rawNode, idx) => {
+    try {
+      const normalized = normalizeCustomNodeDefinition(rawNode, idx + 1);
+      normalized.enabled = rawNode.enabled !== false;
+      const existingIdx = state.nodePackage.customNodes.findIndex((node) => node.type === normalized.type);
+      if (existingIdx >= 0) state.nodePackage.customNodes[existingIdx] = normalized;
+      else state.nodePackage.customNodes.push(normalized);
+    } catch (error) {
+      console.warn('Skipping invalid custom node definition', error);
+    }
+  });
+  refreshNodeCreationActions();
+  renderNodePackageList();
 
   nodesInput.forEach((rawNode, idx) => {
     if (!rawNode || typeof rawNode !== 'object') return;
-    if (!NODE_SCHEMAS[rawNode.type]) return;
+    if (!getNodeSchema(rawNode.type)) return;
     const config = normalizeNodeConfig(rawNode.type, rawNode.config, idx + 1);
     const x = Number(rawNode.position?.x ?? 80 + idx * 40);
     const y = Number(rawNode.position?.y ?? 80 + idx * 40);
@@ -1632,8 +1788,9 @@ function serializeGraph() {
     day: state.day,
     globalPythonCode: state.globalPythonCode,
     ui: structuredClone(state.ui),
+    nodePackage: structuredClone(state.nodePackage),
     nodes: state.nodes.map((node) => {
-      const schemaKeys = NODE_SCHEMAS[node.type].fields.map((f) => f.key);
+      const schemaKeys = getNodeSchema(node.type).fields.map((f) => f.key);
       const config = schemaKeys.reduce((acc, key) => {
         acc[key] = node[key] ?? null;
         return acc;
@@ -2397,14 +2554,6 @@ document.getElementById('addSupplier').addEventListener('click', () => addNode('
 document.getElementById('addWarehouse').addEventListener('click', () => addNode('warehouse'));
 document.getElementById('addPlant').addEventListener('click', () => addNode('plant'));
 document.getElementById('addAnalytics').addEventListener('click', () => addNode('analytics'));
-if (nodeCreateToolbar) {
-  nodeCreateToolbar.querySelectorAll('[data-node-type]').forEach((button) => {
-    button.addEventListener('click', (e) => {
-      const type = e.currentTarget.dataset.nodeType;
-      addNode(type, 48 + state.nodes.length * 18, 48 + state.nodes.length * 14);
-    });
-  });
-}
 if (toggleCreateToolbarBtn) {
   toggleCreateToolbarBtn.addEventListener('click', () => {
     setCreateToolbarVisibility(!state.ui.showCreateToolbar);
@@ -2424,12 +2573,7 @@ snapToGridInput?.addEventListener('change', (e) => {
   persistScenarioToLocalStorage();
 });
 if (canvasContextActions) {
-  canvasContextActions.querySelectorAll('.context-action').forEach((button) => {
-    button.addEventListener('click', (e) => {
-      const type = e.currentTarget.dataset.nodeType;
-      addNodeFromContext(type);
-    });
-  });
+  refreshNodeCreationActions();
 }
 canvasContextSearch?.addEventListener('input', updateContextMenuFilter);
 canvasContextSearch?.addEventListener('keydown', (e) => {
@@ -2523,12 +2667,56 @@ document.getElementById('clearLogBtn').addEventListener('click', () => {
     state.logFlushHandle = null;
   }
 });
+if (importNodePackageBtn && importNodePackageInput) {
+  importNodePackageBtn.addEventListener('click', () => importNodePackageInput.click());
+  importNodePackageInput.addEventListener('change', async (e) => {
+    const [file] = e.target.files ?? [];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      const rawNodes = Array.isArray(parsed) ? parsed : (Array.isArray(parsed.nodes) ? parsed.nodes : []);
+      if (!rawNodes.length) throw new Error('JSON must contain a nodes array.');
+      rawNodes.forEach((rawNode, idx) => {
+        const normalized = normalizeCustomNodeDefinition(rawNode, idx + 1);
+        const existingIdx = state.nodePackage.customNodes.findIndex((node) => node.type === normalized.type);
+        if (existingIdx >= 0) state.nodePackage.customNodes[existingIdx] = normalized;
+        else state.nodePackage.customNodes.push(normalized);
+      });
+      refreshNodeCreationActions();
+      renderNodePackageList();
+      persistScenarioToLocalStorage();
+      log(`Imported ${rawNodes.length} SCFL-node definition(s) from ${file.name}`);
+    } catch (error) {
+      log(`Node package import failed: ${error.message}`);
+      alert(`Could not import node package. ${error.message}`);
+    } finally {
+      importNodePackageInput.value = '';
+    }
+  });
+}
+if (exportNodePackageBtn) {
+  exportNodePackageBtn.addEventListener('click', () => {
+    const payload = JSON.stringify(state.nodePackage, null, 2);
+    const blob = new Blob([payload], { type: 'application/json' });
+    const href = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = href;
+    anchor.download = 'SCFL-node.package.json';
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(href);
+    log('SCFL-node package exported');
+  });
+}
 globalPythonCodeEl.addEventListener('input', (e) => {
   state.globalPythonCode = e.target.value;
   persistScenarioToLocalStorage();
 });
 state.globalPythonCode = globalPythonCodeEl.value;
 setSnapToGrid(state.ui.snapToGrid);
+renderNodePackageList();
 if (showLinkLabelsInput) {
   showLinkLabelsInput.checked = state.ui.showLinkLabels;
   showLinkLabelsInput.addEventListener('change', (e) => {
