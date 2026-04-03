@@ -1,0 +1,113 @@
+{
+  "version": 3,
+  "day": 0,
+  "globalPythonCode": "",
+  "ui": {
+    "showLinkLabels": true,
+    "allowWarehouseToWarehouse": false,
+    "allowPlantOutbound": false
+  },
+  "nodes": [
+    {
+      "id": "node-1",
+      "type": "supplier",
+      "position": { "x": 90, "y": 80 },
+      "config": {
+        "name": "Supplier North",
+        "deliveryFrequencyDays": 2,
+        "deliveryQuantity": 140,
+        "leadTimeDays": 1,
+        "initialInventory": null
+      }
+    },
+    {
+      "id": "node-2",
+      "type": "supplier",
+      "position": { "x": 90, "y": 260 },
+      "config": {
+        "name": "Supplier South",
+        "deliveryFrequencyDays": 3,
+        "deliveryQuantity": 110,
+        "leadTimeDays": 2,
+        "initialInventory": null
+      }
+    },
+    {
+      "id": "node-3",
+      "type": "warehouse",
+      "position": { "x": 430, "y": 170 },
+      "config": {
+        "name": "Central Warehouse",
+        "preparationTimeDays": 1,
+        "deliveryToPlantDays": 2,
+        "storageCapacity": 900,
+        "initialInventory": 220,
+        "reorderPoint": 300
+      }
+    },
+    {
+      "id": "node-4",
+      "type": "plant",
+      "position": { "x": 790, "y": 100 },
+      "config": {
+        "name": "Plant Alpha",
+        "consumptionRatePerDay": 35,
+        "initialInventory": 140,
+        "safetyStock": 70
+      }
+    },
+    {
+      "id": "node-5",
+      "type": "plant",
+      "position": { "x": 790, "y": 290 },
+      "config": {
+        "name": "Plant Beta",
+        "consumptionRatePerDay": 28,
+        "initialInventory": 120,
+        "safetyStock": 60
+      }
+    }
+  ],
+  "links": [
+    {
+      "id": "link-1",
+      "from": "node-1",
+      "to": "node-3",
+      "materialName": "Alloy A",
+      "transportDelayDays": 1,
+      "maxDailyCapacity": 160,
+      "priority": 1,
+      "costPerShipment": 40
+    },
+    {
+      "id": "link-2",
+      "from": "node-2",
+      "to": "node-3",
+      "materialName": "Polymer B",
+      "transportDelayDays": 2,
+      "maxDailyCapacity": 130,
+      "priority": 1,
+      "costPerShipment": 45
+    },
+    {
+      "id": "link-3",
+      "from": "node-3",
+      "to": "node-4",
+      "materialName": "Component Kit",
+      "transportDelayDays": 2,
+      "maxDailyCapacity": 120,
+      "priority": 1,
+      "costPerShipment": 65
+    },
+    {
+      "id": "link-4",
+      "from": "node-3",
+      "to": "node-5",
+      "materialName": "Component Kit",
+      "transportDelayDays": 2,
+      "maxDailyCapacity": 120,
+      "priority": 1,
+      "costPerShipment": 65
+    }
+  ]
+}

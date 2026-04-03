@@ -1,21 +1,3 @@
-import {
-  COST_CATEGORY_KEYS,
-  LINK_SCHEMA,
-  NODE_SCHEMAS,
-  SCENARIO_VERSION,
-  createCostBreakdown,
-  createFinanceState,
-  createLinkData as createLinkDataModel,
-  createNodeData as createNodeDataModel,
-  migrateScenario as migrateScenarioModel,
-  normalizeNodeConfig as normalizeNodeConfigModel,
-  resolveInitialInventory as resolveInitialInventoryModel,
-} from './src/graph-model.js';
-import { createSimulationEngine } from './src/simulation-engine.js';
-import { BUILT_IN_SCENARIOS, GRID_SIZE, MAX_ZOOM, MIN_ZOOM, SCENARIO_STORAGE_KEY, createInitialState } from './src/app-state.js';
-import { verifyScenarioChecksum, withScenarioMeta } from './src/scenario-io.js';
-import { cloneValue } from './src/clone.js';
-
 const workspace = document.getElementById('workspace');
 const linksSvg = document.getElementById('linksSvg');
 const nodeCreateToolbar = document.getElementById('nodeCreateToolbar');
@@ -28,7 +10,6 @@ const dayValue = document.getElementById('dayValue');
 const transitValue = document.getElementById('transitValue');
 const simStatusValue = document.getElementById('simStatusValue');
 const eventLog = document.getElementById('eventLog');
-const alertPanel = document.getElementById('alertPanel');
 const tempWire = document.getElementById('tempWire');
 const kpiBar = document.getElementById('kpiBar');
 const inventoryChart = document.getElementById('inventoryChart');
@@ -40,7 +21,6 @@ const allowWarehouseToWarehouseInput = document.getElementById('allowWarehouseTo
 const allowPlantOutboundInput = document.getElementById('allowPlantOutbound');
 const snapToGridInput = document.getElementById('snapToGrid');
 const scenarioPresetSelect = document.getElementById('scenarioPreset');
-const scenarioDescriptionEl = document.getElementById('scenarioDescription');
 const loadPresetBtn = document.getElementById('loadPresetBtn');
 const resetScenarioBtn = document.getElementById('resetScenarioBtn');
 const exportScenarioBtn = document.getElementById('exportScenarioBtn');
@@ -65,22 +45,208 @@ linksSvg.appendChild(tempLinkPath);
 const selectionBox = document.createElement('div');
 selectionBox.className = 'selection-box hidden';
 workspace.appendChild(selectionBox);
-const SCENARIO_STORAGE_BACKUP_KEY = `${SCENARIO_STORAGE_KEY}:backup`;
 
-const state = createInitialState();
+const MIN_ZOOM = 0.35;
+const MAX_ZOOM = 2.5;
+const GRID_SIZE = 24;
+const SCENARIO_STORAGE_KEY = 'supply-chain-flow-lab:scenario';
+const SCENARIO_VERSION = 4;
 
-function getScenarioDescriptionText(rawDescription) {
-  const text = typeof rawDescription === 'string' ? rawDescription.trim() : '';
-  return text || 'No scenario notes provided.';
-}
+const NODE_SCHEMAS = {
+  supplier: {
+    label: 'Supplier',
+    fields: [
+      { key: 'name', label: 'Name', type: 'string', required: true, defaultValue: (i) => `Supplier ${i}` },
+      { key: 'deliveryFrequencyDays', label: 'Delivery frequency (days)', type: 'int', required: true, min: 1, step: 1, defaultValue: 3 },
+      { key: 'deliveryQuantity', label: 'Delivery quantity', type: 'int', required: true, min: 1, step: 1, defaultValue: 120 },
+      { key: 'leadTimeDays', label: 'Lead time (days)', type: 'int', required: true, min: 0, step: 1, defaultValue: 1 },
+      { key: 'initialInventory', label: 'Initial inventory (optional)', type: 'int', required: false, min: 0, step: 1, defaultValue: null },
+    ],
+  },
+  warehouse: {
+    label: 'Warehouse',
+    fields: [
+      { key: 'name', label: 'Name', type: 'string', required: true, defaultValue: (i) => `Warehouse ${i}` },
+      { key: 'preparationTimeDays', label: 'Preparation time (days)', type: 'int', required: true, min: 0, step: 1, defaultValue: 1 },
+      { key: 'preparationCapacityPerDay', label: 'Preparation capacity / day (optional)', type: 'int', required: false, min: 1, step: 1, defaultValue: null },
+      { key: 'deliveryToPlantDays', label: 'Delivery to plant (days)', type: 'int', required: true, min: 0, step: 1, defaultValue: 2 },
+      { key: 'storageCapacity', label: 'Storage capacity', type: 'int', required: true, min: 1, step: 1, defaultValue: 600 },
+      { key: 'initialInventory', label: 'Initial inventory', type: 'int', required: true, min: 0, step: 1, defaultValue: 120 },
+      { key: 'reorderPoint', label: 'Reorder point (optional)', type: 'int', required: false, min: 0, step: 1, defaultValue: null },
+    ],
+  },
+  plant: {
+    label: 'Plant',
+    fields: [
+      { key: 'name', label: 'Name', type: 'string', required: true, defaultValue: (i) => `Plant ${i}` },
+      { key: 'consumptionRatePerDay', label: 'Consumption rate / day', type: 'int', required: true, min: 0, step: 1, defaultValue: 20 },
+      { key: 'initialInventory', label: 'Initial inventory', type: 'int', required: true, min: 0, step: 1, defaultValue: 100 },
+      { key: 'safetyStock', label: 'Safety stock (optional)', type: 'int', required: false, min: 0, step: 1, defaultValue: null },
+    ],
+  },
+  analytics: {
+    label: 'Analytics',
+    fields: [
+      { key: 'name', label: 'Name', type: 'string', required: true, defaultValue: (i) => `Analytics ${i}` },
+      {
+        key: 'metric',
+        label: 'Metric',
+        type: 'select',
+        required: true,
+        options: [
+          { value: 'stockout_count', label: 'Stockout events' },
+          { value: 'avg_plant_inventory', label: 'Avg plant inventory' },
+          { value: 'warehouse_utilization', label: 'Warehouse utilization %' },
+          { value: 'on_time_rate', label: 'On-time delivery %' },
+          { value: 'avg_queue_time', label: 'Avg warehouse queue time (days)' },
+          { value: 'avg_fulfillment_delay', label: 'Avg fulfillment delay (days)' },
+          { value: 'total_shipped', label: 'Total shipped volume' },
+          { value: 'shipments_today', label: 'Shipments today' },
+          { value: 'node_inventory', label: 'Connected node inventory' },
+          { value: 'node_shipped', label: 'Connected node shipped' },
+          { value: 'node_stockouts', label: 'Connected node stockouts' },
+        ],
+        defaultValue: 'stockout_count',
+      },
+    ],
+  },
+};
 
-function renderScenarioDescription(rawDescription) {
-  if (!scenarioDescriptionEl) return;
-  scenarioDescriptionEl.textContent = getScenarioDescriptionText(rawDescription);
-}
+const state = {
+  nodes: [],
+  links: [],
+  shipments: [],
+  eventLog: [],
+  inventoryHistoryByNode: {},
+  analyticsMetricHistoryByNode: {},
+  transitHistory: [],
+  deliveryStats: {
+    dispatched: 0,
+    onTime: 0,
+    deliveredVolume: 0,
+    shipmentCost: 0,
+    queueEntries: 0,
+    queueDaysTotal: 0,
+    fulfilledRequests: 0,
+    fulfillmentDelayTotal: 0,
+  },
+  shipmentsByDay: [],
+  stockoutEvents: [],
+  analyticsNodeId: null,
+  kpis: {
+    stockoutCount: 0,
+    averagePlantInventory: 0,
+    warehouseUtilization: 0,
+    onTimeDeliveries: { onTime: 0, total: 0, rate: 0 },
+    averageQueueTimeDays: 0,
+    averageFulfillmentDelayDays: 0,
+    totalShippedVolume: 0,
+    totalShipmentCost: 0,
+  },
+  day: 0,
+  drag: null,
+  pan: null,
+  boxSelection: null,
+  linking: null,
+  selectedNodeIds: [],
+  selectedLinkIds: [],
+  simulation: {
+    status: 'idle',
+    timerId: null,
+    speedMs: 800,
+    tickInProgress: false,
+  },
+  logBuffer: [],
+  logFlushHandle: null,
+  nodeCounter: 1,
+  linkCounter: 1,
+  zCounter: 1,
+  camera: { x: 0, y: 0, zoom: 1 },
+  keyState: { space: false },
+  graphErrors: [],
+  globalPythonCode: '',
+  ui: {
+    showLinkLabels: false,
+    allowWarehouseToWarehouse: false,
+    allowPlantOutbound: false,
+    showCreateToolbar: true,
+    snapToGrid: false,
+  },
+  contextCreateAt: null,
+  clipboard: null,
+};
+
+const LINK_SCHEMA = [
+  { key: 'materialName', label: 'Material name', type: 'string', required: true, defaultValue: 'Raw material' },
+  { key: 'transportDelayDays', label: 'Transport delay (days)', type: 'int', required: true, min: 0, step: 1, defaultValue: 1 },
+  { key: 'maxDailyCapacity', label: 'Max daily capacity', type: 'int', required: true, min: 1, step: 1, defaultValue: 120 },
+  { key: 'priority', label: 'Priority', type: 'int', required: true, min: 1, step: 1, defaultValue: 1 },
+  { key: 'costPerShipment', label: 'Cost per shipment (optional)', type: 'number', required: false, min: 0, step: 0.01, defaultValue: null },
+];
+
+const BUILT_IN_SCENARIOS = {
+  blank: {
+    version: SCENARIO_VERSION,
+    day: 0,
+    globalPythonCode: '',
+    ui: { showLinkLabels: false, allowWarehouseToWarehouse: false, allowPlantOutbound: false, showCreateToolbar: true, snapToGrid: false },
+    nodes: [],
+    links: [],
+  },
+  demo: {
+    version: SCENARIO_VERSION,
+    day: 0,
+    globalPythonCode: '',
+    ui: { showLinkLabels: true, allowWarehouseToWarehouse: false, allowPlantOutbound: false, showCreateToolbar: true, snapToGrid: false },
+    nodes: [
+      {
+        id: 'node-1',
+        type: 'supplier',
+        position: { x: 90, y: 80 },
+        config: { name: 'Supplier North', deliveryFrequencyDays: 2, deliveryQuantity: 140, leadTimeDays: 1, initialInventory: null },
+      },
+      {
+        id: 'node-2',
+        type: 'supplier',
+        position: { x: 90, y: 260 },
+        config: { name: 'Supplier South', deliveryFrequencyDays: 3, deliveryQuantity: 110, leadTimeDays: 2, initialInventory: null },
+      },
+      {
+        id: 'node-3',
+        type: 'warehouse',
+        position: { x: 430, y: 170 },
+        config: { name: 'Central Warehouse', preparationTimeDays: 1, preparationCapacityPerDay: 100, deliveryToPlantDays: 2, storageCapacity: 900, initialInventory: 220, reorderPoint: 300 },
+      },
+      {
+        id: 'node-4',
+        type: 'plant',
+        position: { x: 790, y: 100 },
+        config: { name: 'Plant Alpha', consumptionRatePerDay: 35, initialInventory: 140, safetyStock: 70 },
+      },
+      {
+        id: 'node-5',
+        type: 'plant',
+        position: { x: 790, y: 290 },
+        config: { name: 'Plant Beta', consumptionRatePerDay: 28, initialInventory: 120, safetyStock: 60 },
+      },
+    ],
+    links: [
+      { id: 'link-1', from: 'node-1', to: 'node-3', materialName: 'Alloy A', transportDelayDays: 1, maxDailyCapacity: 160, priority: 1, costPerShipment: 40 },
+      { id: 'link-2', from: 'node-2', to: 'node-3', materialName: 'Polymer B', transportDelayDays: 2, maxDailyCapacity: 130, priority: 1, costPerShipment: 45 },
+      { id: 'link-3', from: 'node-3', to: 'node-4', materialName: 'Component Kit', transportDelayDays: 2, maxDailyCapacity: 120, priority: 1, costPerShipment: 65 },
+      { id: 'link-4', from: 'node-3', to: 'node-5', materialName: 'Component Kit', transportDelayDays: 2, maxDailyCapacity: 120, priority: 1, costPerShipment: 65 },
+    ],
+  },
+};
 
 function createNodeData(type) {
-  return createNodeDataModel(type, state.nodeCounter);
+  const schema = NODE_SCHEMAS[type];
+  const data = {};
+  schema.fields.forEach((field) => {
+    const raw = typeof field.defaultValue === 'function' ? field.defaultValue(state.nodeCounter) : field.defaultValue;
+    data[field.key] = raw;
+  });
+  return data;
 }
 
 function addNode(type, x = 80 + state.nodes.length * 40, y = 60 + state.nodes.length * 30) {
@@ -98,8 +264,7 @@ function addNode(type, x = 80 + state.nodes.length * 40, y = 60 + state.nodes.le
     received: 0,
     shipped: 0,
     stockouts: 0,
-    lastMissedShipmentDay: null,
-    initial: cloneValue(data),
+    initial: structuredClone(data),
     validationErrors: {},
   };
   initializeNodeRuntime(node);
@@ -110,7 +275,6 @@ function addNode(type, x = 80 + state.nodes.length * 40, y = 60 + state.nodes.le
   renderAnalyticsNodeOptions();
   selectNodes([node.id]);
   drawLinks();
-  updateOperationalAlerting({ logTransitions: false });
 }
 
 function addNodeFromContext(type) {
@@ -120,7 +284,9 @@ function addNodeFromContext(type) {
 }
 
 function resolveInitialInventory(type, data) {
-  return resolveInitialInventoryModel(type, data);
+  if (type === 'supplier') return data.initialInventory == null ? Infinity : data.initialInventory;
+  if (type === 'analytics') return 0;
+  return data.initialInventory;
 }
 
 function initializeNodeRuntime(node) {
@@ -247,9 +413,6 @@ function bindFieldEvents(body, node) {
       if (fieldSchema?.type === 'int') {
         const trimmed = raw.trim();
         value = trimmed === '' ? null : Number(trimmed);
-      } else if (fieldSchema?.type === 'number') {
-        const trimmed = raw.trim();
-        value = trimmed === '' ? null : Number(trimmed);
       }
       node[field] = value;
       node.initial[field] = value;
@@ -295,7 +458,7 @@ function validateNode(node) {
       return;
     }
 
-    if (field.type === 'int' && !Number.isInteger(value)) {
+    if (!Number.isInteger(value)) {
       errors[field.key] = `${field.label} must be an integer.`;
       return;
     }
@@ -341,7 +504,10 @@ function hasValidationErrors() {
 }
 
 function createLinkData() {
-  return createLinkDataModel();
+  return LINK_SCHEMA.reduce((acc, field) => {
+    acc[field.key] = typeof field.defaultValue === 'function' ? field.defaultValue() : field.defaultValue;
+    return acc;
+  }, {});
 }
 
 function getLinkLabel(link) {
@@ -397,14 +563,6 @@ function getRemainingLinkCapacity(link, day) {
   return Math.max(0, link.maxDailyCapacity - shippedToday);
 }
 
-const simulationEngine = createSimulationEngine({
-  state,
-  getNode,
-  log,
-  getRemainingLinkCapacity,
-  initializeNodeRuntime,
-});
-
 function refreshNode(nodeId) {
   const node = getNode(nodeId);
   const el = getNodeElement(nodeId);
@@ -417,7 +575,6 @@ function refreshNode(nodeId) {
   renderAnalyticsNodeOptions();
   drawLinks();
   renderAnalytics();
-  updateOperationalAlerting({ logTransitions: false });
 }
 
 function deleteNodes(nodeIds) {
@@ -814,13 +971,11 @@ function refreshSimulationNodeViews() {
     const metricPointsEl = el.querySelector('[data-kpi="metric-points"]');
     if (metricPointsEl) metricPointsEl.textContent = state.analyticsMetricHistoryByNode[node.id]?.length ?? 0;
   });
-  updateOperationalAlerting({ logTransitions: false });
 }
 
 function runOneSimulationDay() {
   if (!canRunSimulation()) return false;
   simulateDay();
-  updateOperationalAlerting();
   updateStats();
   refreshSimulationNodeViews();
   renderSelection();
@@ -832,71 +987,15 @@ function stepSimulation() {
   runOneSimulationDay();
 }
 
-function getPlantCostBucket(plantId) {
-  if (!plantId) return null;
-  const plant = getNode(plantId);
-  if (!plant || plant.type !== 'plant') return null;
-  if (!state.finance.costPerPlantServed[plantId]) {
-    state.finance.costPerPlantServed[plantId] = {
-      plantId,
-      plantName: plant.name,
-      totalCost: 0,
-      costBreakdown: createCostBreakdown(),
-    };
-  }
-  return state.finance.costPerPlantServed[plantId];
-}
-
-function getNodeCostBucket(nodeId) {
-  if (!nodeId) return null;
-  const node = getNode(nodeId);
-  if (!node) return null;
-  if (!state.finance.costByNode[nodeId]) {
-    state.finance.costByNode[nodeId] = {
-      nodeId,
-      nodeName: node.name,
-      nodeType: node.type,
-      totalCost: 0,
-      costBreakdown: createCostBreakdown(),
-    };
-  }
-  return state.finance.costByNode[nodeId];
-}
-
-function addCost(categoryKey, amount, options = {}) {
-  const numeric = Number(amount);
-  if (!Number.isFinite(numeric) || numeric <= 0) return;
-  if (!(categoryKey in state.finance.costBreakdown)) return;
-
-  state.finance.totalCost += numeric;
-  state.finance.costBreakdown[categoryKey] += numeric;
-
-  const nodeBucket = getNodeCostBucket(options.nodeId ?? null);
-  if (nodeBucket) {
-    nodeBucket.totalCost += numeric;
-    nodeBucket.costBreakdown[categoryKey] += numeric;
-  }
-
-  const plantBucket = getPlantCostBucket(options.plantId ?? null);
-  if (plantBucket) {
-    plantBucket.totalCost += numeric;
-    plantBucket.costBreakdown[categoryKey] += numeric;
-  }
-}
-
 function simulateDay() {
-  simulationEngine.simulateDay();
+  state.day += 1;
+  state.shipmentsByDay.push({ day: state.day, count: 0, volume: 0 });
+  processArrivals();
+  suppliersShip();
+  warehousesDispatch();
+  plantsConsume();
   recordDailyHistory();
   computeKpis();
-}
-
-function applyWarehouseStorageCosts() {
-  state.nodes.filter((node) => node.type === 'warehouse').forEach((warehouse) => {
-    const storageRate = Number(warehouse.storageCostPerUnitPerDay ?? 0);
-    if (!Number.isFinite(storageRate) || storageRate <= 0) return;
-    if (!Number.isFinite(warehouse.inventory) || warehouse.inventory <= 0) return;
-    addCost(COST_CATEGORY_KEYS.warehouseStorage, warehouse.inventory * storageRate, { nodeId: warehouse.id });
-  });
 }
 
 function processArrivals() {
@@ -932,7 +1031,6 @@ function suppliersShip() {
       .filter((l) => l.from === supplier.id)
       .slice()
       .sort((a, b) => a.priority - b.priority);
-    let shippedToday = 0;
     outgoingLinks.forEach((link) => {
       const target = getNode(link.to);
       if (!target) return;
@@ -942,21 +1040,10 @@ function suppliersShip() {
       const qtyCap = Math.min(supplier.deliveryQuantity, linkCapacity);
       const qty = Number.isFinite(supplier.inventory) ? Math.min(qtyCap, supplier.inventory) : qtyCap;
       if (qty <= 0) return;
-      queueShipment(
-        supplier,
-        target,
-        link,
-        qty,
-        supplier.leadTimeDays + link.transportDelayDays,
-        { plantId: target.type === 'plant' ? target.id : null },
-      );
+      queueShipment(supplier, target, link, qty, supplier.leadTimeDays + link.transportDelayDays);
       if (Number.isFinite(supplier.inventory)) supplier.inventory -= qty;
       supplier.shipped += qty;
-      shippedToday += qty;
     });
-    if (outgoingLinks.length > 0 && shippedToday === 0) {
-      supplier.lastMissedShipmentDay = state.day;
-    }
   });
 }
 
@@ -1066,14 +1153,7 @@ function dispatchPreparedShipments(warehouse) {
       const dispatchQty = Math.min(order.qty, linkCapacity);
       if (dispatchQty > 0) {
         warehouse.shipped += dispatchQty;
-        queueShipment(
-          warehouse,
-          plant,
-          link,
-          dispatchQty,
-          warehouse.deliveryToPlantDays + link.transportDelayDays,
-          { plantId: plant.id },
-        );
+        queueShipment(warehouse, plant, link, dispatchQty, warehouse.deliveryToPlantDays + link.transportDelayDays);
         linkCapacity -= dispatchQty;
         const fulfillmentDelay = Math.max(0, state.day - order.queuedDay);
         state.deliveryStats.fulfilledRequests += 1;
@@ -1115,8 +1195,6 @@ function plantsConsume() {
     const shortfall = Math.abs(plant.inventory);
     plant.inventory = 0;
     plant.stockouts += 1;
-    const stockoutPenalty = Number(plant.stockoutPenaltyPerUnit ?? 0) * shortfall;
-    addCost(COST_CATEGORY_KEYS.plantStockoutPenalty, stockoutPenalty, { nodeId: plant.id, plantId: plant.id });
     state.stockoutEvents.push({ day: state.day, nodeId: plant.id, shortfall });
     log(`${plant.name} stockout (${shortfall} units short)`);
   });
@@ -1180,15 +1258,6 @@ function computeKpis() {
   const averageFulfillmentDelayDays = state.deliveryStats.fulfilledRequests
     ? state.deliveryStats.fulfillmentDelayTotal / state.deliveryStats.fulfilledRequests
     : 0;
-  const totalPlantDemand = plants.reduce((sum, plant) => sum + (plant.consumptionRatePerDay * state.day), 0);
-  const totalDeliveredToPlants = plants.reduce((sum, plant) => sum + plant.received, 0);
-  const fillRate = totalPlantDemand > 0 ? totalDeliveredToPlants / totalPlantDemand : 1;
-  const averageDaysOfCover = plants.length
-    ? plants.reduce((sum, plant) => {
-      const dailyDemand = Math.max(1, Number(plant.consumptionRatePerDay) || 0);
-      return sum + ((Number(plant.inventory) || 0) / dailyDemand);
-    }, 0) / plants.length
-    : 0;
 
   state.kpis = {
     stockoutCount,
@@ -1201,21 +1270,8 @@ function computeKpis() {
     },
     averageQueueTimeDays: Number(averageQueueTimeDays.toFixed(2)),
     averageFulfillmentDelayDays: Number(averageFulfillmentDelayDays.toFixed(2)),
-    fillRate: Number(fillRate.toFixed(4)),
-    averageDaysOfCover: Number(averageDaysOfCover.toFixed(2)),
     totalShippedVolume: state.nodes.reduce((sum, node) => sum + node.shipped, 0),
     totalShipmentCost: Number(state.deliveryStats.shipmentCost.toFixed(2)),
-    totalCost: Number(state.finance.totalCost.toFixed(2)),
-    costBreakdown: Object.fromEntries(Object.entries(state.finance.costBreakdown).map(([key, value]) => [key, Number(value.toFixed(2))])),
-    costPerPlantServed: Object.fromEntries(
-      Object.entries(state.finance.costPerPlantServed).map(([plantId, bucket]) => [plantId, {
-        plantName: getNode(plantId)?.name ?? bucket.plantName,
-        totalCost: Number(bucket.totalCost.toFixed(2)),
-        costBreakdown: Object.fromEntries(
-          Object.entries(bucket.costBreakdown).map(([key, value]) => [key, Number(value.toFixed(2))]),
-        ),
-      }]),
-    ),
   };
 }
 
@@ -1261,42 +1317,17 @@ function buildSimulationOutput() {
         preparingVolume: (warehouse.preparingShipments ?? []).reduce((sum, prep) => sum + prep.qty, 0),
       })),
     },
-    eventLog: cloneValue(state.eventLog),
-    inventoryTimeSeriesByNode: cloneValue(state.inventoryHistoryByNode),
-    shipmentsInTransitHistory: cloneValue(state.transitHistory),
-    kpiSummary: cloneValue(state.kpis),
-    costSummary: {
-      totalCost: state.kpis.totalCost,
-      costBreakdown: cloneValue(state.kpis.costBreakdown),
-      costPerPlantServed: cloneValue(state.kpis.costPerPlantServed),
-      costByNode: Object.fromEntries(
-        Object.entries(state.finance.costByNode).map(([nodeId, bucket]) => [nodeId, {
-          nodeName: getNode(nodeId)?.name ?? bucket.nodeName,
-          nodeType: getNode(nodeId)?.type ?? bucket.nodeType,
-          totalCost: Number(bucket.totalCost.toFixed(2)),
-          costBreakdown: Object.fromEntries(
-            Object.entries(bucket.costBreakdown).map(([key, value]) => [key, Number(value.toFixed(2))]),
-          ),
-        }]),
-      ),
-    },
+    eventLog: structuredClone(state.eventLog),
+    inventoryTimeSeriesByNode: structuredClone(state.inventoryHistoryByNode),
+    shipmentsInTransitHistory: structuredClone(state.transitHistory),
+    kpiSummary: structuredClone(state.kpis),
   };
 }
 
-function queueShipment(from, to, link, qty, leadTime, options = {}) {
+function queueShipment(from, to, link, qty, leadTime) {
   state.deliveryStats.dispatched += 1;
   const shipmentCost = link.costPerShipment == null ? 0 : Number(link.costPerShipment);
   if (Number.isFinite(shipmentCost)) state.deliveryStats.shipmentCost += shipmentCost;
-  addCost(COST_CATEGORY_KEYS.transport, shipmentCost, { nodeId: from.id, plantId: options.plantId ?? null });
-
-  const supplierShipmentCost = from.type === 'supplier' ? Number(from.shipmentCost ?? 0) : 0;
-  addCost(COST_CATEGORY_KEYS.supplierShipment, supplierShipmentCost, { nodeId: from.id, plantId: options.plantId ?? null });
-
-  if (from.type === 'warehouse') {
-    const handlingCostPerUnit = Number(from.handlingCostPerUnit ?? 0);
-    addCost(COST_CATEGORY_KEYS.warehouseHandling, qty * handlingCostPerUnit, { nodeId: from.id, plantId: options.plantId ?? null });
-  }
-
   const dayBucket = state.shipmentsByDay[state.shipmentsByDay.length - 1];
   if (dayBucket) {
     dayBucket.count += 1;
@@ -1339,7 +1370,6 @@ function initializeSimulationTracking() {
     fulfilledRequests: 0,
     fulfillmentDelayTotal: 0,
   };
-  state.finance = createFinanceState();
   state.shipmentsByDay = [];
   state.stockoutEvents = [];
   state.nodes.forEach((node) => {
@@ -1355,7 +1385,6 @@ function initializeSimulationTracking() {
   recordAnalyticsMetricHistory();
   renderAnalyticsNodeOptions();
   renderAnalytics();
-  updateOperationalAlerting({ logTransitions: false });
 }
 
 function resetSimulation() {
@@ -1363,19 +1392,17 @@ function resetSimulation() {
   state.day = 0;
   state.shipments = [];
   state.nodes.forEach((node) => {
-    Object.assign(node, cloneValue(node.initial));
+    Object.assign(node, structuredClone(node.initial));
     node.inventory = resolveInitialInventory(node.type, node);
     node.received = 0;
     node.shipped = 0;
     node.stockouts = 0;
-    node.lastMissedShipmentDay = null;
     initializeNodeRuntime(node);
     refreshNode(node.id);
   });
   validateAll();
   initializeSimulationTracking();
   updateStats();
-  updateOperationalAlerting({ logTransitions: false });
   log('Simulation reset');
   renderSelection();
 }
@@ -1388,24 +1415,88 @@ function clearGraph() {
   state.selectedNodeIds = [];
   state.selectedLinkIds = [];
   state.analyticsNodeId = null;
-  state.scenarioMeta = { label: 'Untitled scenario', savedAt: null, checksum: null };
   state.analyticsMetricHistoryByNode = {};
   state.graphErrors = [];
-  state.nodeStatusById = {};
-  state.alerts = { activeByKey: {} };
   workspace.querySelectorAll('.node-card').forEach((el) => el.remove());
   drawLinks();
-  renderAlertPanel([]);
   renderSelection();
   renderAnalyticsNodeOptions();
 }
 
 function normalizeNodeConfig(type, config = {}, sequence = 1) {
-  return normalizeNodeConfigModel(type, config, sequence);
+  const defaults = createNodeData(type);
+  const normalized = {};
+  NODE_SCHEMAS[type].fields.forEach((field) => {
+    const raw = config[field.key];
+    if (field.type === 'string' || field.type === 'text' || field.type === 'select') {
+      normalized[field.key] = raw == null ? defaults[field.key] : String(raw);
+      return;
+    }
+    if (raw == null || raw === '') {
+      normalized[field.key] = field.required ? defaults[field.key] : null;
+      return;
+    }
+    const numeric = Number(raw);
+    normalized[field.key] = Number.isFinite(numeric) ? numeric : (field.required ? defaults[field.key] : null);
+  });
+  if (!normalized.name) normalized.name = `${NODE_SCHEMAS[type].label} ${sequence}`;
+  return normalized;
 }
 
 function migrateScenario(rawScenario) {
-  return migrateScenarioModel(rawScenario);
+  if (!rawScenario || typeof rawScenario !== 'object') {
+    throw new Error('Scenario must be a JSON object.');
+  }
+
+  const version = Number(rawScenario.version ?? 1);
+  if (!Number.isInteger(version) || version <= 0) {
+    throw new Error('Scenario version must be a positive integer.');
+  }
+  if (version > SCENARIO_VERSION) {
+    throw new Error(`Unsupported scenario version ${version}. This app supports up to version ${SCENARIO_VERSION}.`);
+  }
+
+  const migrated = structuredClone(rawScenario);
+
+  if (version < 2) {
+    migrated.globalPythonCode = migrated.globalPythonCode ?? '';
+    migrated.ui = migrated.ui ?? {};
+    migrated.links = (migrated.links ?? []).map((link) => ({ ...createLinkData(), ...link }));
+  }
+
+  if (version < 3) {
+    migrated.ui = {
+      showLinkLabels: Boolean(migrated.ui?.showLinkLabels),
+      allowWarehouseToWarehouse: Boolean(migrated.ui?.allowWarehouseToWarehouse),
+      allowPlantOutbound: Boolean(migrated.ui?.allowPlantOutbound),
+      showCreateToolbar: true,
+      snapToGrid: false,
+    };
+  }
+
+  if (version < 4) {
+    migrated.nodes = (migrated.nodes ?? []).map((node) => {
+      if (node?.type !== 'warehouse') return node;
+      return {
+        ...node,
+        config: {
+          ...(node.config ?? {}),
+          preparationCapacityPerDay: node.config?.preparationCapacityPerDay ?? null,
+        },
+      };
+    });
+  }
+
+  migrated.ui = {
+    showLinkLabels: Boolean(migrated.ui?.showLinkLabels),
+    allowWarehouseToWarehouse: Boolean(migrated.ui?.allowWarehouseToWarehouse),
+    allowPlantOutbound: Boolean(migrated.ui?.allowPlantOutbound),
+    showCreateToolbar: migrated.ui?.showCreateToolbar !== false,
+    snapToGrid: Boolean(migrated.ui?.snapToGrid),
+  };
+
+  migrated.version = SCENARIO_VERSION;
+  return migrated;
 }
 
 function importScenarioObject(rawScenario, options = {}) {
@@ -1415,13 +1506,6 @@ function importScenarioObject(rawScenario, options = {}) {
 
   clearGraph();
   state.day = Number.isInteger(scenario.day) && scenario.day >= 0 ? scenario.day : 0;
-  state.scenarioMeta = {
-    label: typeof scenario.meta?.label === 'string' ? scenario.meta.label : 'Imported scenario',
-    savedAt: typeof scenario.meta?.savedAt === 'string' ? scenario.meta.savedAt : null,
-    checksum: typeof scenario.meta?.checksum === 'string' ? scenario.meta.checksum : null,
-  };
-  state.scenarioDescription = getScenarioDescriptionText(scenario.description);
-  renderScenarioDescription(state.scenarioDescription);
   state.globalPythonCode = typeof scenario.globalPythonCode === 'string' ? scenario.globalPythonCode : '';
   globalPythonCodeEl.value = state.globalPythonCode;
   state.ui.showLinkLabels = Boolean(scenario.ui?.showLinkLabels);
@@ -1447,8 +1531,7 @@ function importScenarioObject(rawScenario, options = {}) {
       received: 0,
       shipped: 0,
       stockouts: 0,
-      lastMissedShipmentDay: null,
-      initial: cloneValue(config),
+      initial: structuredClone(config),
       validationErrors: {},
     };
     initializeNodeRuntime(node);
@@ -1505,21 +1588,15 @@ function importScenarioObject(rawScenario, options = {}) {
     renderViewport();
     renderAnalytics();
   }
-  updateOperationalAlerting({ logTransitions: false });
-  const checksumState = verifyScenarioChecksum(scenario);
-  if (!checksumState.ok) {
-    logWithLevel(`[WARN] Scenario checksum mismatch. Expected ${checksumState.expected} but received ${checksumState.received}.`, 'alert');
-  }
   if (!options.silent) log(options.logMessage ?? 'Scenario loaded');
 }
 
 function serializeGraph() {
-  const scenario = {
+  return {
     version: SCENARIO_VERSION,
     day: state.day,
-    description: state.scenarioDescription,
     globalPythonCode: state.globalPythonCode,
-    ui: cloneValue(state.ui),
+    ui: structuredClone(state.ui),
     nodes: state.nodes.map((node) => {
       const schemaKeys = NODE_SCHEMAS[node.type].fields.map((f) => f.key);
       const config = schemaKeys.reduce((acc, key) => {
@@ -1539,37 +1616,27 @@ function serializeGraph() {
       costPerShipment: l.costPerShipment,
     })),
   };
-  return withScenarioMeta(scenario, {
-    label: state.scenarioMeta?.label ?? 'Working scenario',
-  });
 }
 
 function persistScenarioToLocalStorage() {
   try {
-    const payload = JSON.stringify(serializeGraph());
-    localStorage.setItem(SCENARIO_STORAGE_BACKUP_KEY, localStorage.getItem(SCENARIO_STORAGE_KEY) ?? payload);
-    localStorage.setItem(SCENARIO_STORAGE_KEY, payload);
+    localStorage.setItem(SCENARIO_STORAGE_KEY, JSON.stringify(serializeGraph()));
   } catch (error) {
     console.warn('Failed to save scenario to localStorage', error);
   }
 }
 
 function loadScenarioFromLocalStorage() {
-  const payloads = [
-    { raw: localStorage.getItem(SCENARIO_STORAGE_KEY), source: 'local storage' },
-    { raw: localStorage.getItem(SCENARIO_STORAGE_BACKUP_KEY), source: 'backup snapshot' },
-  ];
-  for (const payload of payloads) {
-    if (!payload.raw) continue;
-    try {
-      importScenarioObject(JSON.parse(payload.raw), { logMessage: `Scenario restored from ${payload.source}` });
-      return true;
-    } catch (error) {
-      console.warn(`Failed to restore scenario from ${payload.source}`, error);
-    }
+  const raw = localStorage.getItem(SCENARIO_STORAGE_KEY);
+  if (!raw) return false;
+  try {
+    importScenarioObject(JSON.parse(raw), { logMessage: 'Scenario restored from local storage' });
+    return true;
+  } catch (error) {
+    console.warn('Failed to restore scenario from localStorage', error);
+    log(`Could not restore saved scenario (${error.message}). Loading demo instead.`);
+    return false;
   }
-  log('Could not restore saved scenario from local storage. Loading demo instead.');
-  return false;
 }
 
 let autosaveHandle = null;
@@ -1589,11 +1656,6 @@ function updateStats() {
 }
 
 function renderAnalyticsNodeOptions() {
-  if (!analyticsNodeSelect) {
-    if (!state.nodes.length) state.analyticsNodeId = null;
-    else if (!state.nodes.some((n) => n.id === state.analyticsNodeId)) state.analyticsNodeId = state.nodes[0].id;
-    return;
-  }
   const previous = state.analyticsNodeId;
   analyticsNodeSelect.innerHTML = state.nodes
     .map((node) => `<option value="${node.id}">${node.name} (${node.type})</option>`)
@@ -1622,26 +1684,6 @@ function getPrimaryAnalyticsSource(analyticsNode) {
   return inputLink ? getNode(inputLink.from) : null;
 }
 
-function getSourceNodeCost(sourceNode) {
-  if (!sourceNode) return null;
-  return state.finance.costByNode[sourceNode.id]?.totalCost ?? 0;
-}
-
-function getSourcePlantServedCost(sourceNode) {
-  if (!sourceNode) return null;
-  if (sourceNode.type === 'plant') return state.finance.costPerPlantServed[sourceNode.id]?.totalCost ?? 0;
-  if (sourceNode.type === 'warehouse') {
-    const outboundPlantIds = state.links
-      .filter((link) => link.from === sourceNode.id)
-      .map((link) => getNode(link.to))
-      .filter((node) => node?.type === 'plant')
-      .map((node) => node.id);
-    if (!outboundPlantIds.length) return 0;
-    return outboundPlantIds.reduce((sum, plantId) => sum + (state.finance.costPerPlantServed[plantId]?.totalCost ?? 0), 0);
-  }
-  return null;
-}
-
 function readMetricValue(analyticsNode) {
   const source = getPrimaryAnalyticsSource(analyticsNode);
   switch (analyticsNode.metric) {
@@ -1659,22 +1701,6 @@ function readMetricValue(analyticsNode) {
       return `${state.kpis.averageFulfillmentDelayDays.toFixed(1)} d`;
     case 'total_shipped':
       return state.kpis.totalShippedVolume;
-    case 'total_cost':
-      return formatLinkCost(state.kpis.totalCost);
-    case 'transport_cost':
-      return formatLinkCost(state.kpis.costBreakdown.transport);
-    case 'supplier_shipment_cost':
-      return formatLinkCost(state.kpis.costBreakdown.supplierShipment);
-    case 'warehouse_handling_cost':
-      return formatLinkCost(state.kpis.costBreakdown.warehouseHandling);
-    case 'warehouse_storage_cost':
-      return formatLinkCost(state.kpis.costBreakdown.warehouseStorage);
-    case 'stockout_penalty_cost':
-      return formatLinkCost(state.kpis.costBreakdown.plantStockoutPenalty);
-    case 'node_total_cost':
-      return source ? formatLinkCost(getSourceNodeCost(source)) : '—';
-    case 'node_plant_served_cost':
-      return source ? formatLinkCost(getSourcePlantServedCost(source)) : '—';
     case 'shipments_today':
       return state.shipmentsByDay.at(-1)?.count ?? 0;
     case 'node_inventory':
@@ -1705,22 +1731,6 @@ function readMetricNumericValue(analyticsNode) {
       return state.kpis.averageFulfillmentDelayDays;
     case 'total_shipped':
       return state.kpis.totalShippedVolume;
-    case 'total_cost':
-      return state.kpis.totalCost;
-    case 'transport_cost':
-      return state.kpis.costBreakdown.transport;
-    case 'supplier_shipment_cost':
-      return state.kpis.costBreakdown.supplierShipment;
-    case 'warehouse_handling_cost':
-      return state.kpis.costBreakdown.warehouseHandling;
-    case 'warehouse_storage_cost':
-      return state.kpis.costBreakdown.warehouseStorage;
-    case 'stockout_penalty_cost':
-      return state.kpis.costBreakdown.plantStockoutPenalty;
-    case 'node_total_cost':
-      return source ? getSourceNodeCost(source) : null;
-    case 'node_plant_served_cost':
-      return source ? getSourcePlantServedCost(source) : null;
     case 'shipments_today':
       return state.shipmentsByDay.at(-1)?.count ?? 0;
     case 'node_inventory':
@@ -1761,27 +1771,13 @@ function renderAnalyticsNodeCharts() {
 }
 
 function renderKpiBar() {
-  if (!kpiBar) return;
   const analyticsNodes = state.nodes.filter((node) => node.type === 'analytics');
-  const operationalCards = [
-    {
-      label: 'Fill rate',
-      value: `${Math.round((state.kpis.fillRate ?? 0) * 100)}%`,
-      meta: `${state.kpis.totalShippedVolume} units shipped`,
-    },
-    {
-      label: 'Avg days of cover',
-      value: `${(state.kpis.averageDaysOfCover ?? 0).toFixed(1)} d`,
-      meta: `Across ${state.nodes.filter((node) => node.type === 'plant').length} plants`,
-    },
-    {
-      label: 'Stockout events',
-      value: String(state.kpis.stockoutCount ?? 0),
-      meta: `On-time deliveries ${Math.round((state.kpis.onTimeDeliveries?.rate ?? 0) * 100)}%`,
-    },
-  ];
+  if (!analyticsNodes.length) {
+    kpiBar.innerHTML = '<div class="kpi-pill" style="grid-column: 1 / -1;"><span>No analytics nodes yet</span><strong>Add an Analytics node to publish metrics.</strong></div>';
+    return;
+  }
 
-  const analyticsCards = analyticsNodes.map((node) => {
+  kpiBar.innerHTML = analyticsNodes.map((node) => {
     const source = getPrimaryAnalyticsSource(node);
     const value = readMetricValue(node);
     return `
@@ -1791,28 +1787,10 @@ function renderKpiBar() {
         <div class="chart-meta">${node.metric}${source ? ` · source: ${source.name}` : ''}</div>
       </div>
     `;
-  });
-
-  const cardsHtml = [
-    ...operationalCards.map((card) => `
-      <div class="kpi-pill">
-        <span>${card.label}</span>
-        <strong>${card.value}</strong>
-        <div class="chart-meta">${card.meta}</div>
-      </div>
-    `),
-    ...analyticsCards,
-  ];
-
-  if (!analyticsNodes.length) {
-    cardsHtml.push('<div class="kpi-pill"><span>Analytics</span><strong>Add an Analytics node</strong><div class="chart-meta">Connect it to a node to publish custom metrics.</div></div>');
-  }
-
-  kpiBar.innerHTML = cardsHtml.join('');
+  }).join('');
 }
 
 function renderInventoryChart() {
-  if (!inventoryChart) return;
   const nodeId = state.analyticsNodeId;
   const history = nodeId ? (state.inventoryHistoryByNode[nodeId] ?? []) : [];
   const stockoutsForNode = state.stockoutEvents.filter((event) => event.nodeId === nodeId);
@@ -1826,7 +1804,6 @@ function renderInventoryChart() {
 }
 
 function renderShipmentChart() {
-  if (!shipmentChart) return;
   drawLineChart(shipmentChart, {
     points: state.shipmentsByDay.map((pt) => ({ x: pt.day, y: pt.count })),
     className: 'shipments',
@@ -1836,7 +1813,6 @@ function renderShipmentChart() {
 }
 
 function drawLineChart(svg, config) {
-  if (!svg) return;
   const width = 640;
   const height = 180;
   const pad = { top: 12, right: 14, bottom: 24, left: 34 };
@@ -1918,11 +1894,6 @@ function applyNodeStyles(node) {
   el.style.transform = `scale(${state.camera.zoom})`;
   el.style.transformOrigin = 'top left';
   el.style.zIndex = `${node.z}`;
-  el.classList.remove('node-status-healthy', 'node-status-risk', 'node-status-critical');
-  const status = state.nodeStatusById[node.id] ?? { level: 'healthy', label: 'Healthy' };
-  el.classList.add(`node-status-${status.level}`);
-  const statusEl = el.querySelector('[data-role="node-status"]');
-  if (statusEl) statusEl.textContent = status.label;
 }
 
 function updateSelectionClasses() {
@@ -1936,7 +1907,7 @@ function selectNodes(nodeIds, options = {}) {
   state.selectedNodeIds = [...new Set(nodeIds)];
   if (state.selectedNodeIds.length === 1) {
     state.analyticsNodeId = state.selectedNodeIds[0];
-    if (analyticsNodeSelect) analyticsNodeSelect.value = state.analyticsNodeId;
+    analyticsNodeSelect.value = state.analyticsNodeId;
   }
   if (!options.keepLinks) state.selectedLinkIds = [];
   updateSelectionClasses();
@@ -1979,11 +1950,11 @@ function copySelectedNodes() {
   const links = state.links.filter((link) => selectedNodeIds.has(link.from) && selectedNodeIds.has(link.to));
   state.clipboard = {
     nodes: selectedNodes.map((node) => ({
-      node: cloneValue(node),
+      node: structuredClone(node),
       offsetX: node.x - minX,
       offsetY: node.y - minY,
     })),
-    links: links.map((link) => cloneValue(link)),
+    links: links.map((link) => structuredClone(link)),
   };
   log(`Copied ${selectedNodes.length} node${selectedNodes.length > 1 ? 's' : ''}`);
   return true;
@@ -1997,14 +1968,14 @@ function pasteClipboard(options = {}) {
   const cloneMap = new Map();
   const pastedNodeIds = state.clipboard.nodes.map((entry, idx) => {
     const id = `node-${state.nodeCounter++}`;
-    const copy = cloneValue(entry.node);
+    const copy = structuredClone(entry.node);
     const next = snapPosition(entry.node.x + dx, entry.node.y + dy);
     copy.id = id;
     if (renameAsCopy) copy.name = `${entry.node.name} Copy`;
     copy.x = Math.max(16, next.x);
     copy.y = Math.max(16, next.y);
     copy.z = state.zCounter++;
-    copy.initial = cloneValue(copy.initial);
+    copy.initial = structuredClone(copy.initial);
     copy.validationErrors = {};
     cloneMap.set(entry.node.id, id);
     state.nodes.push(copy);
@@ -2017,7 +1988,7 @@ function pasteClipboard(options = {}) {
     const to = cloneMap.get(link.to);
     if (!from || !to) return;
     state.links.push({
-      ...cloneValue(link),
+      ...structuredClone(link),
       id: `link-${state.linkCounter++}`,
       from,
       to,
@@ -2214,12 +2185,8 @@ function drawTempLink(pointer) {
 }
 
 function log(message) {
-  logWithLevel(message);
-}
-
-function logWithLevel(message, level = 'info') {
-  state.eventLog.push({ day: state.day, message, level });
-  state.logBuffer.push({ day: state.day, message, level });
+  state.eventLog.push({ day: state.day, message });
+  state.logBuffer.push({ day: state.day, message });
   if (!state.logFlushHandle) {
     state.logFlushHandle = window.requestAnimationFrame(flushEventLogBuffer);
   }
@@ -2232,7 +2199,7 @@ function flushEventLogBuffer() {
   const fragment = document.createDocumentFragment();
   entries.forEach((item) => {
     const entry = document.createElement('div');
-    entry.className = `log-entry${item.level && item.level !== 'info' ? ` level-${item.level}` : ''}`;
+    entry.className = 'log-entry';
     entry.textContent = `Day ${item.day}: ${item.message}`;
     fragment.prepend(entry);
   });
@@ -2240,71 +2207,6 @@ function flushEventLogBuffer() {
   while (eventLog.childElementCount > 600) {
     eventLog.lastElementChild?.remove();
   }
-}
-
-function evaluateNodeOperationalStatus(node) {
-  if (node.type === 'plant' && node.stockouts > 0) {
-    return { level: 'critical', label: 'Stockout', message: `${node.name} is in stockout.` };
-  }
-  if (node.type === 'warehouse') {
-    const reorderPoint = node.reorderPoint ?? null;
-    const nearEmptyThreshold = Math.max(1, Math.floor((node.storageCapacity ?? 0) * 0.15));
-    const belowReorder = reorderPoint != null && node.inventory <= reorderPoint;
-    const nearEmpty = Number.isFinite(node.inventory) && node.inventory <= nearEmptyThreshold;
-    const blocked = (node.preparationQueue?.length ?? 0) > 0 && node.inventory <= 0;
-    if (blocked) return { level: 'critical', label: 'Blocked', message: `${node.name} is blocked with queued requests and no inventory.` };
-    if (belowReorder || nearEmpty) return { level: 'risk', label: 'At risk', message: `${node.name} inventory is below operating targets.` };
-  }
-  if (node.type === 'supplier' && node.lastMissedShipmentDay === state.day) {
-    return { level: 'risk', label: 'Delayed', message: `${node.name} missed a scheduled shipment.` };
-  }
-  return { level: 'healthy', label: 'Healthy', message: '' };
-}
-
-function updateOperationalAlerting(options = {}) {
-  const logTransitions = options.logTransitions !== false;
-  const previousAlerts = state.alerts.activeByKey ?? {};
-  const nextAlerts = {};
-  const activeAlerts = [];
-
-  state.nodes.forEach((node) => {
-    const status = evaluateNodeOperationalStatus(node);
-    state.nodeStatusById[node.id] = status;
-    if (status.level === 'healthy') return;
-    const key = `${node.id}:${status.label}`;
-    const alert = { key, nodeId: node.id, nodeName: node.name, severity: status.level, label: status.label, message: status.message };
-    nextAlerts[key] = alert;
-    activeAlerts.push(alert);
-  });
-
-  if (logTransitions) {
-    Object.values(nextAlerts).forEach((alert) => {
-      if (!previousAlerts[alert.key]) {
-        logWithLevel(`[ALERT] ${alert.message}`, 'alert');
-      }
-    });
-    Object.values(previousAlerts).forEach((alert) => {
-      if (!nextAlerts[alert.key]) {
-        log(`[RESOLVED] ${alert.nodeName} alert cleared.`);
-      }
-    });
-  }
-
-  state.alerts.activeByKey = nextAlerts;
-  renderAlertPanel(activeAlerts);
-  state.nodes.forEach((node) => applyNodeStyles(node));
-}
-
-function renderAlertPanel(alerts = []) {
-  if (!alertPanel) return;
-  if (!alerts.length) {
-    alertPanel.innerHTML = '<div class="alert-entry empty">No active operational alerts.</div>';
-    return;
-  }
-  alertPanel.innerHTML = alerts
-    .sort((a, b) => (a.severity === b.severity ? a.nodeName.localeCompare(b.nodeName) : (a.severity === 'critical' ? -1 : 1)))
-    .map((alert) => `<div class="alert-entry ${alert.severity}"><strong>${alert.label}</strong> — ${alert.message}</div>`)
-    .join('');
 }
 
 function scheduleNextSimulationTick() {
@@ -2451,21 +2353,18 @@ window.addEventListener('keyup', (e) => {
   }
 });
 
-document.querySelectorAll('[data-create-node]').forEach((button) => {
-  button.addEventListener('click', (e) => {
-    const type = e.currentTarget.dataset.createNode;
-    if (!type) return;
-    if (e.currentTarget.classList.contains('context-action')) {
-      addNodeFromContext(type);
-      return;
-    }
-    if (e.currentTarget.closest('#nodeCreateToolbar')) {
+document.getElementById('addSupplier').addEventListener('click', () => addNode('supplier'));
+document.getElementById('addWarehouse').addEventListener('click', () => addNode('warehouse'));
+document.getElementById('addPlant').addEventListener('click', () => addNode('plant'));
+document.getElementById('addAnalytics').addEventListener('click', () => addNode('analytics'));
+if (nodeCreateToolbar) {
+  nodeCreateToolbar.querySelectorAll('[data-node-type]').forEach((button) => {
+    button.addEventListener('click', (e) => {
+      const type = e.currentTarget.dataset.nodeType;
       addNode(type, 48 + state.nodes.length * 18, 48 + state.nodes.length * 14);
-      return;
-    }
-    addNode(type);
+    });
   });
-});
+}
 if (toggleCreateToolbarBtn) {
   toggleCreateToolbarBtn.addEventListener('click', () => {
     setCreateToolbarVisibility(!state.ui.showCreateToolbar);
@@ -2484,13 +2383,21 @@ snapToGridInput?.addEventListener('change', (e) => {
   setSnapToGrid(e.target.checked);
   persistScenarioToLocalStorage();
 });
+if (canvasContextActions) {
+  canvasContextActions.querySelectorAll('.context-action').forEach((button) => {
+    button.addEventListener('click', (e) => {
+      const type = e.currentTarget.dataset.nodeType;
+      addNodeFromContext(type);
+    });
+  });
+}
 canvasContextSearch?.addEventListener('input', updateContextMenuFilter);
 canvasContextSearch?.addEventListener('keydown', (e) => {
   if (e.key !== 'Enter') return;
   const firstVisible = canvasContextActions?.querySelector('.context-action:not(.hidden)');
   if (!firstVisible) return;
   e.preventDefault();
-  addNodeFromContext(firstVisible.dataset.createNode);
+  addNodeFromContext(firstVisible.dataset.nodeType);
 });
 document.getElementById('clearLinks').addEventListener('click', () => {
   state.links = [];
@@ -2509,19 +2416,13 @@ if (loadPresetBtn) {
   loadPresetBtn.addEventListener('click', () => {
     const preset = scenarioPresetSelect?.value ?? 'blank';
     if (!BUILT_IN_SCENARIOS[preset]) return;
-    importScenarioObject(cloneValue(BUILT_IN_SCENARIOS[preset]), { logMessage: `${preset === 'demo' ? 'Demo' : 'Blank'} scenario loaded` });
+    importScenarioObject(structuredClone(BUILT_IN_SCENARIOS[preset]), { logMessage: `${preset === 'demo' ? 'Demo' : 'Blank'} scenario loaded` });
     persistScenarioToLocalStorage();
-  });
-}
-if (scenarioPresetSelect) {
-  scenarioPresetSelect.addEventListener('change', (e) => {
-    const preset = e.target.value;
-    renderScenarioDescription(BUILT_IN_SCENARIOS[preset]?.description);
   });
 }
 if (resetScenarioBtn) {
   resetScenarioBtn.addEventListener('click', () => {
-    importScenarioObject(cloneValue(BUILT_IN_SCENARIOS.blank), { logMessage: 'Scenario reset to blank' });
+    importScenarioObject(structuredClone(BUILT_IN_SCENARIOS.blank), { logMessage: 'Scenario reset to blank' });
     persistScenarioToLocalStorage();
   });
 }
@@ -2567,12 +2468,10 @@ if (tickSpeedInput) {
     if (state.simulation.status === 'running') scheduleNextSimulationTick();
   });
 }
-if (analyticsNodeSelect) {
-  analyticsNodeSelect.addEventListener('change', (e) => {
-    state.analyticsNodeId = e.target.value;
-    renderInventoryChart();
-  });
-}
+analyticsNodeSelect.addEventListener('change', (e) => {
+  state.analyticsNodeId = e.target.value;
+  renderInventoryChart();
+});
 document.getElementById('clearLogBtn').addEventListener('click', () => {
   eventLog.innerHTML = '';
   state.eventLog = [];
@@ -2588,7 +2487,6 @@ globalPythonCodeEl.addEventListener('input', (e) => {
 });
 state.globalPythonCode = globalPythonCodeEl.value;
 setSnapToGrid(state.ui.snapToGrid);
-renderScenarioDescription(BUILT_IN_SCENARIOS[scenarioPresetSelect?.value ?? 'demo']?.description);
 if (showLinkLabelsInput) {
   showLinkLabelsInput.checked = state.ui.showLinkLabels;
   showLinkLabelsInput.addEventListener('change', (e) => {
@@ -2619,7 +2517,7 @@ if (allowPlantOutboundInput) {
 }
 startScenarioAutosave();
 if (!loadScenarioFromLocalStorage()) {
-  importScenarioObject(cloneValue(BUILT_IN_SCENARIOS.demo), { logMessage: 'Built-in demo scenario loaded' });
+  importScenarioObject(structuredClone(BUILT_IN_SCENARIOS.demo), { logMessage: 'Built-in demo scenario loaded' });
   persistScenarioToLocalStorage();
 }
 
@@ -2627,8 +2525,8 @@ window.SupplyChainFlowLab = {
   serializeGraph,
   importScenarioObject,
   migrateScenario,
-  loadBuiltInScenario: (name) => importScenarioObject(cloneValue(BUILT_IN_SCENARIOS[name] ?? BUILT_IN_SCENARIOS.blank)),
-  getState: () => cloneValue({ nodes: state.nodes, links: state.links, graphErrors: state.graphErrors, globalPythonCode: state.globalPythonCode }),
+  loadBuiltInScenario: (name) => importScenarioObject(structuredClone(BUILT_IN_SCENARIOS[name] ?? BUILT_IN_SCENARIOS.blank)),
+  getState: () => structuredClone({ nodes: state.nodes, links: state.links, graphErrors: state.graphErrors, globalPythonCode: state.globalPythonCode }),
   stepSimulation,
   simulateDays,
   getSimulationOutput: buildSimulationOutput,
