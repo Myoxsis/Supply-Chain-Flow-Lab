@@ -108,6 +108,7 @@ def clamp(value, min_value, max_value):
           <span><i class="dot warehouse"></i>Warehouse</span>
           <span><i class="dot plant"></i>Plant</span>
         </div>
+        <button id="toggleCreateToolbar" class="ghost small">Quick add</button>
       </header>
 
       <section class="analytics-panel">
@@ -131,8 +132,22 @@ def clamp(value, min_value, max_value):
       </section>
 
       <section id="workspace" class="workspace">
+        <div id="nodeCreateToolbar" class="node-create-toolbar">
+          <button class="toolbar-action" data-node-type="supplier">+ Supplier</button>
+          <button class="toolbar-action" data-node-type="warehouse">+ Warehouse</button>
+          <button class="toolbar-action" data-node-type="plant">+ Plant</button>
+        </div>
         <svg id="linksSvg" class="links" aria-hidden="true"></svg>
         <div id="tempWire" class="temp-wire-label hidden">Linking...</div>
+        <div id="canvasContextMenu" class="canvas-context-menu hidden" role="menu" aria-label="Canvas actions">
+          <input id="canvasContextSearch" type="search" placeholder="Filter actions..." aria-label="Filter canvas actions" />
+          <div class="canvas-context-actions">
+            <button class="context-action" data-node-type="supplier" role="menuitem">Add Supplier</button>
+            <button class="context-action" data-node-type="warehouse" role="menuitem">Add Warehouse</button>
+            <button class="context-action" data-node-type="plant" role="menuitem">Add Plant</button>
+          </div>
+          <p class="context-empty hidden">No actions match.</p>
+        </div>
       </section>
 
       <footer class="event-log-wrap">

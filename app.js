@@ -1,5 +1,9 @@
 const workspace = document.getElementById('workspace');
 const linksSvg = document.getElementById('linksSvg');
+const nodeCreateToolbar = document.getElementById('nodeCreateToolbar');
+const toggleCreateToolbarBtn = document.getElementById('toggleCreateToolbar');
+const canvasContextMenu = document.getElementById('canvasContextMenu');
+const canvasContextSearch = document.getElementById('canvasContextSearch');
 const nodeTemplate = document.getElementById('nodeTemplate');
 const selectionPanel = document.getElementById('selectionPanel');
 const dayValue = document.getElementById('dayValue');
@@ -20,6 +24,8 @@ const resetScenarioBtn = document.getElementById('resetScenarioBtn');
 const exportScenarioBtn = document.getElementById('exportScenarioBtn');
 const importScenarioBtn = document.getElementById('importScenarioBtn');
 const importScenarioInput = document.getElementById('importScenarioInput');
+const canvasContextActions = canvasContextMenu?.querySelector('.canvas-context-actions');
+const canvasContextEmpty = canvasContextMenu?.querySelector('.context-empty');
 const tempLinkPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
 tempLinkPath.setAttribute('class', 'link-path temp-link hidden');
 linksSvg.appendChild(tempLinkPath);
@@ -129,7 +135,9 @@ const state = {
     showLinkLabels: false,
     allowWarehouseToWarehouse: false,
     allowPlantOutbound: false,
+    showCreateToolbar: true,
   },
+  contextCreateAt: null,
 };
 
 const LINK_SCHEMA = [
@@ -145,7 +153,7 @@ const BUILT_IN_SCENARIOS = {
     version: SCENARIO_VERSION,
     day: 0,
     globalPythonCode: '',
-    ui: { showLinkLabels: false, allowWarehouseToWarehouse: false, allowPlantOutbound: false },
+    ui: { showLinkLabels: false, allowWarehouseToWarehouse: false, allowPlantOutbound: false, showCreateToolbar: true },
     nodes: [],
     links: [],
   },
@@ -153,7 +161,7 @@ const BUILT_IN_SCENARIOS = {
     version: SCENARIO_VERSION,
     day: 0,
     globalPythonCode: '',
-    ui: { showLinkLabels: true, allowWarehouseToWarehouse: false, allowPlantOutbound: false },
+    ui: { showLinkLabels: true, allowWarehouseToWarehouse: false, allowPlantOutbound: false, showCreateToolbar: true },
     nodes: [
       {
         id: 'node-1',
@@ -229,6 +237,12 @@ function addNode(type, x = 80 + state.nodes.length * 40, y = 60 + state.nodes.le
   renderAnalyticsNodeOptions();
   selectNodes([node.id]);
   drawLinks();
+}
+
+function addNodeFromContext(type) {
+  if (!state.contextCreateAt) return;
+  addNode(type, state.contextCreateAt.x, state.contextCreateAt.y);
+  hideCanvasContextMenu();
 }
 
 function resolveInitialInventory(type, data) {
@@ -1168,8 +1182,16 @@ function migrateScenario(rawScenario) {
       showLinkLabels: Boolean(migrated.ui?.showLinkLabels),
       allowWarehouseToWarehouse: Boolean(migrated.ui?.allowWarehouseToWarehouse),
       allowPlantOutbound: Boolean(migrated.ui?.allowPlantOutbound),
+      showCreateToolbar: true,
     };
   }
+
+  migrated.ui = {
+    showLinkLabels: Boolean(migrated.ui?.showLinkLabels),
+    allowWarehouseToWarehouse: Boolean(migrated.ui?.allowWarehouseToWarehouse),
+    allowPlantOutbound: Boolean(migrated.ui?.allowPlantOutbound),
+    showCreateToolbar: migrated.ui?.showCreateToolbar !== false,
+  };
 
   migrated.version = SCENARIO_VERSION;
   return migrated;
@@ -1187,6 +1209,7 @@ function importScenarioObject(rawScenario, options = {}) {
   state.ui.showLinkLabels = Boolean(scenario.ui?.showLinkLabels);
   state.ui.allowWarehouseToWarehouse = Boolean(scenario.ui?.allowWarehouseToWarehouse);
   state.ui.allowPlantOutbound = Boolean(scenario.ui?.allowPlantOutbound);
+  state.ui.showCreateToolbar = scenario.ui?.showCreateToolbar !== false;
 
   nodesInput.forEach((rawNode, idx) => {
     if (!rawNode || typeof rawNode !== 'object') return;
@@ -1248,6 +1271,7 @@ function importScenarioObject(rawScenario, options = {}) {
   showLinkLabelsInput.checked = state.ui.showLinkLabels;
   allowWarehouseToWarehouseInput.checked = state.ui.allowWarehouseToWarehouse;
   allowPlantOutboundInput.checked = state.ui.allowPlantOutbound;
+  setCreateToolbarVisibility(state.ui.showCreateToolbar);
 
   validateAll();
   initializeSimulationTracking();
@@ -1622,6 +1646,51 @@ function normalizedBounds(a, b) {
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 
+function setCreateToolbarVisibility(show) {
+  state.ui.showCreateToolbar = !!show;
+  nodeCreateToolbar?.classList.toggle('hidden', !state.ui.showCreateToolbar);
+  if (toggleCreateToolbarBtn) {
+    toggleCreateToolbarBtn.textContent = state.ui.showCreateToolbar ? 'Hide quick add' : 'Quick add';
+  }
+}
+
+function updateContextMenuFilter() {
+  const query = (canvasContextSearch?.value ?? '').trim().toLowerCase();
+  const buttons = canvasContextActions?.querySelectorAll('.context-action') ?? [];
+  let visibleCount = 0;
+  buttons.forEach((button) => {
+    const show = !query || button.textContent.toLowerCase().includes(query);
+    button.classList.toggle('hidden', !show);
+    if (show) visibleCount += 1;
+  });
+  canvasContextEmpty?.classList.toggle('hidden', visibleCount > 0);
+}
+
+function showCanvasContextMenu(e) {
+  if (!canvasContextMenu) return;
+  const clickWorld = screenToWorld(e.clientX, e.clientY);
+  state.contextCreateAt = {
+    x: Math.max(16, clickWorld.x),
+    y: Math.max(16, clickWorld.y),
+  };
+  const rect = workspace.getBoundingClientRect();
+  const nextLeft = Math.min(rect.width - 246, Math.max(8, e.clientX - rect.left));
+  const nextTop = Math.min(rect.height - 186, Math.max(8, e.clientY - rect.top));
+  canvasContextMenu.style.left = `${nextLeft}px`;
+  canvasContextMenu.style.top = `${nextTop}px`;
+  canvasContextMenu.classList.remove('hidden');
+  if (canvasContextSearch) {
+    canvasContextSearch.value = '';
+    updateContextMenuFilter();
+    canvasContextSearch.focus();
+  }
+}
+
+function hideCanvasContextMenu() {
+  canvasContextMenu?.classList.add('hidden');
+  state.contextCreateAt = null;
+}
+
 function clearLinkingState() {
   state.linking = null;
   tempWire.classList.add('hidden');
@@ -1657,6 +1726,7 @@ function togglePlay(play) {
 }
 
 workspace.addEventListener('pointerdown', (e) => {
+  hideCanvasContextMenu();
   const onNode = e.target.closest('.node-card');
   const onPort = e.target.closest('.port');
   if (onNode || onPort) return;
@@ -1668,6 +1738,14 @@ workspace.addEventListener('pointerdown', (e) => {
 
   if (e.button !== 0) return;
   startBoxSelection(e);
+});
+
+workspace.addEventListener('contextmenu', (e) => {
+  const onNode = e.target.closest('.node-card');
+  const onPort = e.target.closest('.port');
+  if (onNode || onPort || state.keyState.space) return;
+  e.preventDefault();
+  showCanvasContextMenu(e);
 });
 
 workspace.addEventListener('wheel', (e) => {
@@ -1682,6 +1760,12 @@ workspace.addEventListener('pointerdown', () => {
   updateSelectionClasses();
   renderSelection();
 }, true);
+
+window.addEventListener('pointerdown', (e) => {
+  if (!canvasContextMenu || canvasContextMenu.classList.contains('hidden')) return;
+  if (e.target.closest('#canvasContextMenu')) return;
+  hideCanvasContextMenu();
+});
 
 window.addEventListener('resize', renderViewport);
 
@@ -1712,6 +1796,7 @@ window.addEventListener('keydown', (e) => {
 
   if (e.key === 'Escape') {
     clearLinkingState();
+    hideCanvasContextMenu();
   }
 });
 
@@ -1726,6 +1811,36 @@ document.getElementById('addSupplier').addEventListener('click', () => addNode('
 document.getElementById('addWarehouse').addEventListener('click', () => addNode('warehouse'));
 document.getElementById('addPlant').addEventListener('click', () => addNode('plant'));
 document.getElementById('addAnalytics').addEventListener('click', () => addNode('analytics'));
+if (nodeCreateToolbar) {
+  nodeCreateToolbar.querySelectorAll('[data-node-type]').forEach((button) => {
+    button.addEventListener('click', (e) => {
+      const type = e.currentTarget.dataset.nodeType;
+      addNode(type, 48 + state.nodes.length * 18, 48 + state.nodes.length * 14);
+    });
+  });
+}
+if (toggleCreateToolbarBtn) {
+  toggleCreateToolbarBtn.addEventListener('click', () => {
+    setCreateToolbarVisibility(!state.ui.showCreateToolbar);
+    persistScenarioToLocalStorage();
+  });
+}
+if (canvasContextActions) {
+  canvasContextActions.querySelectorAll('.context-action').forEach((button) => {
+    button.addEventListener('click', (e) => {
+      const type = e.currentTarget.dataset.nodeType;
+      addNodeFromContext(type);
+    });
+  });
+}
+canvasContextSearch?.addEventListener('input', updateContextMenuFilter);
+canvasContextSearch?.addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  const firstVisible = canvasContextActions?.querySelector('.context-action:not(.hidden)');
+  if (!firstVisible) return;
+  e.preventDefault();
+  addNodeFromContext(firstVisible.dataset.nodeType);
+});
 document.getElementById('clearLinks').addEventListener('click', () => {
   state.links = [];
   state.selectedLinkIds = [];
