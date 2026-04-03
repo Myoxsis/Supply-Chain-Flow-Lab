@@ -1,3 +1,4 @@
+import { cloneValue } from './clone.js';
 export function stableStringify(value) {
   return JSON.stringify(sortObject(value));
 }
@@ -22,7 +23,7 @@ export function hashScenarioPayload(payload) {
 }
 
 export function withScenarioMeta(scenario, options = {}) {
-  const copy = structuredClone(scenario);
+  const copy = cloneValue(scenario);
   const payloadWithoutMeta = { ...copy, meta: undefined };
   const checksum = hashScenarioPayload(payloadWithoutMeta);
   copy.meta = {

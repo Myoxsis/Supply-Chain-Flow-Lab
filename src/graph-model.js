@@ -1,3 +1,4 @@
+import { cloneValue } from './clone.js';
 /** @typedef {'supplier'|'warehouse'|'plant'|'analytics'} NodeType */
 
 export const SCENARIO_VERSION = 6;
@@ -150,7 +151,7 @@ export function migrateScenario(rawScenario) {
   const version = Number(rawScenario.version ?? 1);
   if (!Number.isInteger(version) || version <= 0) throw new Error('Scenario version must be a positive integer.');
   if (version > SCENARIO_VERSION) throw new Error(`Unsupported scenario version ${version}. This app supports up to version ${SCENARIO_VERSION}.`);
-  const migrated = structuredClone(rawScenario);
+  const migrated = cloneValue(rawScenario);
 
   if (version < 2) {
     migrated.globalPythonCode = migrated.globalPythonCode ?? '';
