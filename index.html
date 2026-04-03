@@ -29,6 +29,22 @@
       </section>
 
       <section class="panel">
+        <h2>Scenario</h2>
+        <label for="scenarioPreset">Preset</label>
+        <select id="scenarioPreset">
+          <option value="blank">Blank</option>
+          <option value="demo">Demo</option>
+        </select>
+        <div class="button-grid scenario-grid">
+          <button id="loadPresetBtn">Load preset</button>
+          <button id="resetScenarioBtn" class="ghost">Reset blank</button>
+          <button id="exportScenarioBtn">Export JSON</button>
+          <button id="importScenarioBtn" class="ghost">Import JSON</button>
+        </div>
+        <input id="importScenarioInput" type="file" accept="application/json,.json" hidden />
+      </section>
+
+      <section class="panel">
         <h2>Global Python</h2>
         <label for="globalPythonCode">Shared script for the whole node app</label>
         <textarea id="globalPythonCode" class="code-editor" spellcheck="false" placeholder="# Shared helpers for analytics nodes

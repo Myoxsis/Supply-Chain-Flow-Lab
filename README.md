@@ -29,6 +29,19 @@ What this draft does
   - Plant consumes at its consumption rate.
 - Event log and selection inspector.
 - Global Python script box + per-Analytics-node Python snippets (stored in graph state for backend execution workflows).
+- Scenario management:
+  - Auto-saves current scenario to localStorage.
+  - Import/export scenario JSON.
+  - Built-in presets: Blank + Demo.
+  - Versioned scenario schema with migration hooks.
+
+Scenario JSON versioning strategy
+- Current version: `3`.
+- `migrateScenario()` upgrades old payloads to the latest format before import.
+- Version migration rules currently include:
+  - v1 → v2: adds `globalPythonCode`, `ui`, and fills missing link fields with defaults.
+  - v2 → v3: normalizes UI flags (`showLinkLabels`, `allowWarehouseToWarehouse`, `allowPlantOutbound`).
+- Future versions should add a new migration branch and keep previous branches intact for backward compatibility.
 
 Keyboard shortcuts
 - Delete / Backspace: delete selected node(s) or selected link.
