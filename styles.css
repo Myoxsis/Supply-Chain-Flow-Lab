@@ -122,8 +122,47 @@ input[type="range"] { width: 100%; margin-top: 8px; }
 .stats-row { display: flex; justify-content: space-between; margin-top: 12px; }
 .meta-label { display: block; font-size: 12px; color: var(--muted); }
 .empty-state { color: var(--muted); font-size: 14px; }
+.panel-note {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
 .panel ul { margin: 0; padding-left: 18px; color: var(--muted); }
 .panel li { margin-bottom: 6px; font-size: 13px; }
+.node-package-list {
+  margin-top: 10px;
+  display: grid;
+  gap: 8px;
+}
+.node-package-item {
+  border: 1px solid #2f3a4d;
+  border-radius: 10px;
+  background: #121926;
+  padding: 8px;
+}
+.node-package-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+}
+.node-package-item strong {
+  font-size: 13px;
+}
+.node-package-item small {
+  color: var(--muted);
+  display: block;
+  margin-top: 2px;
+}
+.node-package-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.node-package-actions button {
+  padding: 4px 8px;
+  font-size: 11px;
+}
 .workspace-shell { display: grid; grid-template-rows: auto auto 1fr 180px; min-width: 0; }
 .workspace-topbar {
   display: flex; justify-content: space-between; align-items: center; padding: 10px 14px;

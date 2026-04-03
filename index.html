@@ -28,15 +28,76 @@
         </button>
       </div>
 
-      <div class="sidebar-content">
-        <section class="panel nav-panel active" id="nodesPanel">
-          <h2>Nodes</h2>
-          <div class="button-grid">
-            <button id="addSupplier">+ Supplier</button>
-            <button id="addWarehouse">+ Warehouse</button>
-            <button id="addPlant">+ Plant</button>
-            <button id="addAnalytics">+ Analytics</button>
-            <button id="clearLinks" class="ghost">Clear Links</button>
+      <section class="panel">
+        <h2>Build</h2>
+        <div class="button-grid">
+          <button id="addSupplier">+ Supplier</button>
+          <button id="addWarehouse">+ Warehouse</button>
+          <button id="addPlant">+ Plant</button>
+          <button id="addAnalytics">+ Analytics</button>
+          <button id="clearLinks" class="ghost">Clear Links</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>SCFL-node package</h2>
+        <p class="panel-note">Manage installable node types (ComfyUI-style custom nodes).</p>
+        <div class="button-grid scenario-grid">
+          <button id="importNodePackageBtn">Import node JSON</button>
+          <button id="exportNodePackageBtn" class="ghost">Export package</button>
+        </div>
+        <input id="importNodePackageInput" type="file" accept="application/json,.json" hidden />
+        <div id="nodePackageList" class="node-package-list empty-state">No community nodes installed.</div>
+      </section>
+
+      <section class="panel">
+        <h2>Scenario</h2>
+        <label for="scenarioPreset">Preset</label>
+        <select id="scenarioPreset">
+          <option value="blank">Blank</option>
+          <option value="demo">Demo</option>
+        </select>
+        <div class="button-grid scenario-grid">
+          <button id="loadPresetBtn">Load preset</button>
+          <button id="resetScenarioBtn" class="ghost">Reset blank</button>
+          <button id="exportScenarioBtn">Export JSON</button>
+          <button id="importScenarioBtn" class="ghost">Import JSON</button>
+        </div>
+        <input id="importScenarioInput" type="file" accept="application/json,.json" hidden />
+      </section>
+
+      <section class="panel">
+        <h2>Global Python</h2>
+        <label for="globalPythonCode">Shared script for the whole node app</label>
+        <textarea id="globalPythonCode" class="code-editor" spellcheck="false" placeholder="# Shared helpers for analytics nodes
+def clamp(value, min_value, max_value):
+    return max(min_value, min(value, max_value))"></textarea>
+      </section>
+
+      <section class="panel">
+        <h2>Simulation</h2>
+        <div class="button-grid sim-grid">
+          <button id="startBtn">Start simulation</button>
+          <button id="pauseBtn" class="ghost">Pause</button>
+          <button id="resumeBtn">Resume</button>
+          <button id="stepBtn" class="ghost">Step one day</button>
+          <button id="resetBtn" class="ghost">Reset simulation</button>
+        </div>
+        <div class="sim-status-row">
+          <span class="meta-label">Status</span>
+          <strong id="simStatusValue">Idle</strong>
+        </div>
+        <label>
+          Speed
+          <div class="range-with-value">
+            <input id="tickSpeed" type="range" min="120" max="1500" step="20" value="800" />
+            <span id="tickSpeedValue">800 ms/day</span>
+          </div>
+        </label>
+        <div class="stats-row">
+          <div>
+            <span class="meta-label">Current simulated day</span>
+            <strong id="dayValue">0</strong>
           </div>
           <div class="panel inspector-panel">
             <h2>Inspector</h2>
