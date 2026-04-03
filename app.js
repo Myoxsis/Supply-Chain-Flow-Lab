@@ -50,7 +50,7 @@ const MIN_ZOOM = 0.35;
 const MAX_ZOOM = 2.5;
 const GRID_SIZE = 24;
 const SCENARIO_STORAGE_KEY = 'supply-chain-flow-lab:scenario';
-const SCENARIO_VERSION = 4;
+const SCENARIO_VERSION = 5;
 
 const NODE_SCHEMAS = {
   supplier: {
@@ -335,11 +335,22 @@ function renderNode(node) {
     bringNodeToFront(node.id);
   });
 
-  fragment.querySelector('.out-port').addEventListener('pointerdown', (e) => startLinkDrag(e, node.id));
+  fragment.querySelectorAll('.out-port').forEach((portEl) => {
+    portEl.addEventListener('pointerdown', (e) => startLinkDrag(e, node.id, portEl.dataset.portKind));
+  });
   fragment.querySelector('.in-port').addEventListener('pointerup', (e) => tryCompleteLink(e, node.id));
+  configureNodePorts(node, el);
 
   workspace.appendChild(fragment);
   applyNodeStyles(node);
+}
+
+function configureNodePorts(node, el) {
+  const materialPort = el.querySelector('.out-port-material');
+  const informationPort = el.querySelector('.out-port-information');
+  const supportsDualOutput = ['supplier', 'warehouse', 'plant'].includes(node.type);
+  if (materialPort) materialPort.classList.toggle('hidden', !supportsDualOutput);
+  if (informationPort) informationPort.classList.toggle('hidden', !(supportsDualOutput || node.type === 'analytics'));
 }
 
 function getFieldError(node, fieldKey) {
@@ -507,13 +518,13 @@ function createLinkData() {
   return LINK_SCHEMA.reduce((acc, field) => {
     acc[field.key] = typeof field.defaultValue === 'function' ? field.defaultValue() : field.defaultValue;
     return acc;
-  }, {});
+  }, { linkType: 'material' });
 }
 
 function getLinkLabel(link) {
   const delay = `${link.transportDelayDays}d`;
   const cap = `cap ${link.maxDailyCapacity}`;
-  return `${link.materialName} • ${delay} • ${cap} • p${link.priority}`;
+  return `${(link.linkType ?? 'material') === 'information' ? 'Info' : 'Material'} • ${link.materialName} • ${delay} • ${cap} • p${link.priority}`;
 }
 
 function formatLinkCost(value) {
@@ -526,7 +537,7 @@ function validateLink(link) {
   const from = getNode(link.from);
   const to = getNode(link.to);
   if (!from || !to) return ['Missing endpoint node.'];
-  if (!isValidLink(from, to)) errors.push(`Connection ${from.type} → ${to.type} is not allowed.`);
+  if (!isValidLink(from, to, link.linkType)) errors.push(`Connection ${from.type} → ${to.type} for ${(link.linkType ?? 'material')} flow is not allowed.`);
 
   LINK_SCHEMA.forEach((field) => {
     const value = link[field.key];
@@ -710,16 +721,23 @@ function updateSelectionBox() {
   selectionBox.style.height = `${(bounds.y2 - bounds.y1) * state.camera.zoom}px`;
 }
 
-function startLinkDrag(e, nodeId) {
+function startLinkDrag(e, nodeId, linkType = 'material') {
   if (e.button !== 0) return;
   e.stopPropagation();
   const fromPort = e.currentTarget;
-  state.linking = { pointerId: e.pointerId, from: nodeId, origin: portCenter(fromPort), pointer: portCenter(fromPort), targetNodeId: null };
+  state.linking = {
+    pointerId: e.pointerId,
+    from: nodeId,
+    linkType: linkType === 'information' ? 'information' : 'material',
+    origin: portCenter(fromPort),
+    pointer: portCenter(fromPort),
+    targetNodeId: null,
+  };
   tempWire.classList.remove('hidden');
   drawTempLink(state.linking.pointer);
   window.addEventListener('pointermove', onLinkDragMove);
   window.addEventListener('pointerup', stopLinkDrag, { once: true });
-  log(`Started link from ${getNode(nodeId).name}`);
+  log(`Started ${state.linking.linkType} link from ${getNode(nodeId).name}`);
 }
 
 function onLinkDragMove(e) {
@@ -732,7 +750,7 @@ function onLinkDragMove(e) {
   const candidateNodeId = targetCard?.dataset.id;
   const from = getNode(state.linking.from);
   const to = getNode(candidateNodeId);
-  state.linking.targetNodeId = from && to && isValidLink(from, to) ? to.id : null;
+  state.linking.targetNodeId = from && to && isValidLink(from, to, state.linking.linkType) ? to.id : null;
 
   tempWire.style.left = `${pointer.x + 12}px`;
   tempWire.style.top = `${pointer.y + 12}px`;
@@ -743,46 +761,51 @@ function stopLinkDrag(e) {
   if (!state.linking || e.pointerId !== state.linking.pointerId) return;
   const targetInput = document.elementFromPoint(e.clientX, e.clientY)?.closest('.in-port');
   const targetNodeId = targetInput?.closest('.node-card')?.dataset.id;
-  tryCreateLink(state.linking.from, targetNodeId);
+  tryCreateLink(state.linking.from, targetNodeId, state.linking.linkType);
   clearLinkingState();
 }
 
 function tryCompleteLink(e, nodeId) {
   e.stopPropagation();
   if (!state.linking) return;
-  tryCreateLink(state.linking.from, nodeId);
+  tryCreateLink(state.linking.from, nodeId, state.linking.linkType);
   clearLinkingState();
 }
 
-function tryCreateLink(fromId, toId) {
+function tryCreateLink(fromId, toId, linkType = 'material') {
   if (!fromId || !toId || fromId === toId) return;
   const from = getNode(fromId);
   const to = getNode(toId);
   if (!from || !to) return;
-  if (!isValidLink(from, to)) {
-    log(`Invalid link: ${from.type} → ${to.type}`);
+  const normalizedLinkType = linkType === 'information' ? 'information' : 'material';
+  if (!isValidLink(from, to, normalizedLinkType)) {
+    log(`Invalid ${normalizedLinkType} link: ${from.type} → ${to.type}`);
     return;
   }
-  if (state.links.some((l) => l.from === from.id && l.to === to.id)) return;
+  if (state.links.some((l) => l.from === from.id && l.to === to.id && (l.linkType ?? 'material') === normalizedLinkType)) return;
 
   const link = {
     id: `link-${state.linkCounter++}`,
     from: from.id,
     to: to.id,
     ...createLinkData(),
+    linkType: normalizedLinkType,
     validationErrors: {},
   };
   state.links.push(link);
   state.selectedLinkIds = [link.id];
   state.selectedNodeIds = [];
   validateAll();
-  log(`Linked ${from.name} → ${to.name}`);
+  log(`Linked ${from.name} → ${to.name} (${normalizedLinkType})`);
   drawLinks();
   renderSelection();
 }
 
-function isValidLink(from, to) {
-  if (to.type === 'analytics' && from.type !== 'analytics') return true;
+function isValidLink(from, to, linkType = 'material') {
+  const normalizedLinkType = linkType === 'information' ? 'information' : 'material';
+  if (normalizedLinkType === 'information') {
+    return to.type === 'analytics' && ['supplier', 'warehouse', 'plant'].includes(from.type);
+  }
   if (from.type === 'plant' && !state.ui.allowPlantOutbound) return false;
   if (from.type === 'supplier' && (to.type === 'warehouse' || to.type === 'plant')) return true;
   if (from.type === 'warehouse' && to.type === 'plant') return true;
@@ -793,7 +816,7 @@ function isValidLink(from, to) {
 function drawLinks() {
   linksSvg.querySelectorAll('.link-path:not(.temp-link), .link-label').forEach((el) => el.remove());
   state.links.forEach((link) => {
-    const fromEl = workspace.querySelector(`.node-card[data-id="${link.from}"] .out-port`);
+    const fromEl = workspace.querySelector(`.node-card[data-id="${link.from}"] .out-port[data-port-kind="${link.linkType ?? 'material'}"]`);
     const toEl = workspace.querySelector(`.node-card[data-id="${link.to}"] .in-port`);
     if (!fromEl || !toEl) return;
     const p1 = portCenter(fromEl);
@@ -845,6 +868,7 @@ function renderSelection() {
       selectionPanel.innerHTML = `
         <div class="selection-grid">
           <div class="selection-row"><span>Selection</span><strong>Link</strong></div>
+          <div class="selection-row"><span>Flow type</span><strong>${link.linkType ?? 'material'}</strong></div>
           <div class="selection-row"><span>From</span><strong>${getNode(link.from)?.name ?? 'Unknown'}</strong></div>
           <div class="selection-row"><span>To</span><strong>${getNode(link.to)?.name ?? 'Unknown'}</strong></div>
           <div class="selection-row"><span>Cost / shipment</span><strong>${formatLinkCost(link.costPerShipment)}</strong></div>
@@ -1029,6 +1053,7 @@ function suppliersShip() {
     if (state.day % supplier.deliveryFrequencyDays !== 0) return;
     const outgoingLinks = state.links
       .filter((l) => l.from === supplier.id)
+      .filter((l) => (l.linkType ?? 'material') === 'material')
       .slice()
       .sort((a, b) => a.priority - b.priority);
     outgoingLinks.forEach((link) => {
@@ -1059,6 +1084,7 @@ function warehousesDispatch() {
 function createWarehouseOutboundRequests(warehouse) {
   const outboundLinks = state.links
     .filter((l) => l.from === warehouse.id)
+    .filter((l) => (l.linkType ?? 'material') === 'material')
     .slice()
     .sort((a, b) => a.priority - b.priority);
   outboundLinks.forEach((link) => {
@@ -1487,6 +1513,14 @@ function migrateScenario(rawScenario) {
     });
   }
 
+  if (version < 5) {
+    const nodeTypeById = new Map((migrated.nodes ?? []).map((node) => [node.id, node.type]));
+    migrated.links = (migrated.links ?? []).map((link) => ({
+      ...link,
+      linkType: link.linkType ?? (nodeTypeById.get(link.to) === 'analytics' ? 'information' : 'material'),
+    }));
+  }
+
   migrated.ui = {
     showLinkLabels: Boolean(migrated.ui?.showLinkLabels),
     allowWarehouseToWarehouse: Boolean(migrated.ui?.allowWarehouseToWarehouse),
@@ -1552,6 +1586,7 @@ function importScenarioObject(rawScenario, options = {}) {
       id: typeof rawLink.id === 'string' && rawLink.id ? rawLink.id : `link-${idx + 1}`,
       from: rawLink.from,
       to: rawLink.to,
+      linkType: rawLink.linkType === 'information' ? 'information' : 'material',
       materialName: String(rawLink.materialName ?? defaults.materialName),
       transportDelayDays: Number.isFinite(transportDelayDays) ? transportDelayDays : defaults.transportDelayDays,
       maxDailyCapacity: Number.isFinite(maxDailyCapacity) ? maxDailyCapacity : defaults.maxDailyCapacity,
@@ -1609,6 +1644,7 @@ function serializeGraph() {
       id: l.id,
       from: l.from,
       to: l.to,
+      linkType: l.linkType ?? 'material',
       materialName: l.materialName,
       transportDelayDays: l.transportDelayDays,
       maxDailyCapacity: l.maxDailyCapacity,
@@ -1681,7 +1717,7 @@ function renderAnalytics() {
 }
 
 function getPrimaryAnalyticsSource(analyticsNode) {
-  const inputLink = state.links.find((link) => link.to === analyticsNode.id);
+  const inputLink = state.links.find((link) => link.to === analyticsNode.id && (link.linkType ?? 'material') === 'information');
   return inputLink ? getNode(inputLink.from) : null;
 }
 
