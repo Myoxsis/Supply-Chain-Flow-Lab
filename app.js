@@ -6,6 +6,9 @@ const dayValue = document.getElementById('dayValue');
 const transitValue = document.getElementById('transitValue');
 const eventLog = document.getElementById('eventLog');
 const tempWire = document.getElementById('tempWire');
+const tempLinkPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+tempLinkPath.setAttribute('class', 'link-path temp-link hidden');
+linksSvg.appendChild(tempLinkPath);
 
 const state = {
   nodes: [],
@@ -201,18 +204,16 @@ function selectNode(nodeId) {
 function handlePortClick(event, nodeId, side) {
   event.stopPropagation();
   if (side === 'out') {
-    state.linking = { from: nodeId };
+    const outPort = workspace.querySelector(`.node-card[data-id="${nodeId}"] .out-port`);
+    state.linking = { from: nodeId, origin: outPort ? portCenter(outPort) : null };
     tempWire.classList.remove('hidden');
-    tempWire.style.left = `${event.clientX}px`;
-    tempWire.style.top = `${event.clientY}px`;
     log(`Started link from ${getNode(nodeId).name}`);
     return;
   }
 
   if (!state.linking) return;
   if (state.linking.from === nodeId) {
-    state.linking = null;
-    tempWire.classList.add('hidden');
+    clearLinkingState();
     return;
   }
 
@@ -220,8 +221,7 @@ function handlePortClick(event, nodeId, side) {
   const to = getNode(nodeId);
   if (!isValidLink(from, to)) {
     log(`Invalid link: ${from.type} → ${to.type}`);
-    state.linking = null;
-    tempWire.classList.add('hidden');
+    clearLinkingState();
     return;
   }
 
@@ -229,8 +229,7 @@ function handlePortClick(event, nodeId, side) {
     state.links.push({ id: `link-${state.linkCounter++}`, from: from.id, to: to.id });
     log(`Linked ${from.name} → ${to.name}`);
   }
-  state.linking = null;
-  tempWire.classList.add('hidden');
+  clearLinkingState();
   drawLinks();
   renderSelection();
 }
@@ -244,29 +243,32 @@ function isValidLink(from, to) {
 workspace.addEventListener('pointermove', (e) => {
   if (!state.linking) return;
   const rect = workspace.getBoundingClientRect();
-  tempWire.style.left = `${e.clientX - rect.left + 16}px`;
-  tempWire.style.top = `${e.clientY - rect.top + 16}px`;
+  const x = e.clientX - rect.left;
+  const y = e.clientY - rect.top;
+  tempWire.style.left = `${x + 12}px`;
+  tempWire.style.top = `${y + 12}px`;
+  drawTempLink({ x, y });
 });
 
 workspace.addEventListener('dblclick', () => {
-  state.linking = null;
-  tempWire.classList.add('hidden');
+  clearLinkingState();
 });
 
 function drawLinks() {
-  linksSvg.innerHTML = '';
+  linksSvg.querySelectorAll('.link-path:not(.temp-link)').forEach((path) => path.remove());
   state.links.forEach((link) => {
     const fromEl = workspace.querySelector(`.node-card[data-id="${link.from}"] .out-port`);
     const toEl = workspace.querySelector(`.node-card[data-id="${link.to}"] .in-port`);
     if (!fromEl || !toEl) return;
     const p1 = portCenter(fromEl);
     const p2 = portCenter(toEl);
-    const dx = Math.max(80, Math.abs(p2.x - p1.x) * 0.5);
+    const dx = Math.max(70, Math.abs(p2.x - p1.x) * 0.55);
     const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     path.setAttribute('class', 'link-path');
     path.setAttribute('d', `M ${p1.x} ${p1.y} C ${p1.x + dx} ${p1.y}, ${p2.x - dx} ${p2.y}, ${p2.x} ${p2.y}`);
     linksSvg.appendChild(path);
   });
+  linksSvg.appendChild(tempLinkPath);
 }
 
 function portCenter(el) {
@@ -398,6 +400,20 @@ function log(message) {
   entry.className = 'log-entry';
   entry.textContent = `Day ${state.day}: ${message}`;
   eventLog.prepend(entry);
+}
+
+function drawTempLink(pointer) {
+  if (!state.linking?.origin) return;
+  const start = state.linking.origin;
+  const dx = Math.max(55, Math.abs(pointer.x - start.x) * 0.45);
+  tempLinkPath.setAttribute('d', `M ${start.x} ${start.y} C ${start.x + dx} ${start.y}, ${pointer.x - dx} ${pointer.y}, ${pointer.x} ${pointer.y}`);
+  tempLinkPath.classList.remove('hidden');
+}
+
+function clearLinkingState() {
+  state.linking = null;
+  tempWire.classList.add('hidden');
+  tempLinkPath.classList.add('hidden');
 }
 
 function togglePlay(play) {
