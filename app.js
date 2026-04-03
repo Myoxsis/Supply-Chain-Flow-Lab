@@ -54,6 +54,17 @@ const state = {
   nodes: [],
   links: [],
   shipments: [],
+  eventLog: [],
+  inventoryHistoryByNode: {},
+  transitHistory: [],
+  deliveryStats: { dispatched: 0, onTime: 0, deliveredVolume: 0 },
+  kpis: {
+    stockoutCount: 0,
+    averagePlantInventory: 0,
+    warehouseUtilization: 0,
+    onTimeDeliveries: { onTime: 0, total: 0, rate: 0 },
+    totalShippedVolume: 0,
+  },
   day: 0,
   drag: null,
   pan: null,
@@ -563,14 +574,20 @@ function canRunSimulation() {
 
 function stepSimulation() {
   if (!canRunSimulation()) return;
+  simulateDay();
+  updateStats();
+  state.nodes.forEach((n) => refreshNode(n.id));
+  renderSelection();
+}
+
+function simulateDay() {
   state.day += 1;
   processArrivals();
   suppliersShip();
   warehousesDispatch();
   plantsConsume();
-  updateStats();
-  state.nodes.forEach((n) => refreshNode(n.id));
-  renderSelection();
+  recordDailyHistory();
+  computeKpis();
 }
 
 function processArrivals() {
@@ -591,6 +608,10 @@ function processArrivals() {
 
     if (Number.isFinite(toNode.inventory)) toNode.inventory += receivedQty;
     toNode.received += receivedQty;
+    if (shipment.arrivalDay === state.day) {
+      state.deliveryStats.onTime += 1;
+    }
+    state.deliveryStats.deliveredVolume += receivedQty;
     log(`${receivedQty} units arrived at ${toNode.name} from ${shipment.fromName}`);
   });
 }
@@ -630,21 +651,148 @@ function warehousesDispatch() {
 
 function plantsConsume() {
   state.nodes.filter((n) => n.type === 'plant').forEach((plant) => {
-    if (plant.inventory >= plant.consumptionRatePerDay) {
-      plant.inventory -= plant.consumptionRatePerDay;
+    plant.inventory -= plant.consumptionRatePerDay;
+    if (plant.inventory >= 0) {
       log(`${plant.name} consumed ${plant.consumptionRatePerDay} units`);
-    } else {
-      const consumed = plant.inventory;
-      plant.inventory = 0;
-      plant.stockouts += 1;
-      log(`${plant.name} stocked out after consuming ${consumed} units`);
+      return;
     }
+
+    const shortfall = Math.abs(plant.inventory);
+    plant.inventory = 0;
+    plant.stockouts += 1;
+    log(`${plant.name} stockout (${shortfall} units short)`);
   });
 }
 
+function recordDailyHistory() {
+  state.nodes.forEach((node) => {
+    if (!state.inventoryHistoryByNode[node.id]) state.inventoryHistoryByNode[node.id] = [];
+    state.inventoryHistoryByNode[node.id].push({
+      day: state.day,
+      inventory: Number.isFinite(node.inventory) ? node.inventory : null,
+      onHandLabel: Number.isFinite(node.inventory) ? node.inventory : '∞',
+    });
+  });
+
+  state.transitHistory.push({
+    day: state.day,
+    shipmentsInTransit: state.shipments.length,
+    inTransitVolume: state.shipments.reduce((sum, shipment) => sum + shipment.qty, 0),
+    shipments: state.shipments.map((shipment) => ({
+      from: shipment.from,
+      to: shipment.to,
+      qty: shipment.qty,
+      departureDay: shipment.departureDay,
+      arrivalDay: shipment.arrivalDay,
+    })),
+  });
+}
+
+function computeKpis() {
+  const plants = state.nodes.filter((n) => n.type === 'plant');
+  const warehouses = state.nodes.filter((n) => n.type === 'warehouse');
+
+  const stockoutCount = plants.reduce((sum, p) => sum + p.stockouts, 0);
+
+  const plantSamples = plants.reduce((sum, plant) => sum + (state.inventoryHistoryByNode[plant.id]?.length ?? 0), 0);
+  const averagePlantInventory = plantSamples
+    ? plants.reduce((sum, plant) => {
+      const history = state.inventoryHistoryByNode[plant.id] ?? [];
+      return sum + history.reduce((inner, pt) => inner + (pt.inventory ?? 0), 0);
+    }, 0) / plantSamples
+    : 0;
+
+  const warehouseUtilization = warehouses.length
+    ? warehouses.reduce((sum, warehouse) => {
+      const history = state.inventoryHistoryByNode[warehouse.id] ?? [];
+      if (!history.length || !warehouse.storageCapacity) return sum;
+      const avgOnHand = history.reduce((inner, pt) => inner + (pt.inventory ?? 0), 0) / history.length;
+      return sum + (avgOnHand / warehouse.storageCapacity);
+    }, 0) / warehouses.length
+    : 0;
+
+  const totalDeliveries = state.deliveryStats.dispatched;
+  const onTime = state.deliveryStats.onTime;
+  const onTimeRate = totalDeliveries ? onTime / totalDeliveries : 1;
+
+  state.kpis = {
+    stockoutCount,
+    averagePlantInventory: Number(averagePlantInventory.toFixed(2)),
+    warehouseUtilization: Number(warehouseUtilization.toFixed(4)),
+    onTimeDeliveries: {
+      onTime,
+      total: totalDeliveries,
+      rate: Number(onTimeRate.toFixed(4)),
+    },
+    totalShippedVolume: state.nodes.reduce((sum, node) => sum + node.shipped, 0),
+  };
+}
+
+function simulateDays(days) {
+  if (!canRunSimulation()) return null;
+  const totalDays = Number(days);
+  if (!Number.isInteger(totalDays) || totalDays < 0) throw new Error('days must be a non-negative integer');
+  for (let i = 0; i < totalDays; i += 1) simulateDay();
+  updateStats();
+  state.nodes.forEach((n) => refreshNode(n.id));
+  renderSelection();
+  return buildSimulationOutput();
+}
+
+function buildSimulationOutput() {
+  return {
+    deterministicSimulationState: {
+      day: state.day,
+      nodes: state.nodes.map((node) => ({
+        id: node.id,
+        name: node.name,
+        type: node.type,
+        inventory: Number.isFinite(node.inventory) ? node.inventory : null,
+        shipped: node.shipped,
+        received: node.received,
+        stockouts: node.stockouts,
+      })),
+      shipmentsInTransit: state.shipments.map((shipment) => ({
+        from: shipment.from,
+        to: shipment.to,
+        qty: shipment.qty,
+        departureDay: shipment.departureDay,
+        arrivalDay: shipment.arrivalDay,
+      })),
+    },
+    eventLog: structuredClone(state.eventLog),
+    inventoryTimeSeriesByNode: structuredClone(state.inventoryHistoryByNode),
+    shipmentsInTransitHistory: structuredClone(state.transitHistory),
+    kpiSummary: structuredClone(state.kpis),
+  };
+}
+
 function queueShipment(from, to, qty, leadTime) {
-  state.shipments.push({ from: from.id, to: to.id, qty, arrivalDay: state.day + leadTime, fromName: from.name });
+  state.deliveryStats.dispatched += 1;
+  state.shipments.push({
+    from: from.id,
+    to: to.id,
+    qty,
+    departureDay: state.day,
+    arrivalDay: state.day + leadTime,
+    fromName: from.name,
+  });
   log(`${from.name} shipped ${qty} units to ${to.name} (ETA day ${state.day + leadTime})`);
+}
+
+function initializeSimulationTracking() {
+  state.eventLog = [];
+  state.inventoryHistoryByNode = {};
+  state.transitHistory = [];
+  state.deliveryStats = { dispatched: 0, onTime: 0, deliveredVolume: 0 };
+  state.nodes.forEach((node) => {
+    state.inventoryHistoryByNode[node.id] = [{
+      day: state.day,
+      inventory: Number.isFinite(node.inventory) ? node.inventory : null,
+      onHandLabel: Number.isFinite(node.inventory) ? node.inventory : '∞',
+    }];
+  });
+  computeKpis();
 }
 
 function resetSimulation() {
@@ -659,6 +807,7 @@ function resetSimulation() {
     refreshNode(node.id);
   });
   validateAll();
+  initializeSimulationTracking();
   updateStats();
   log('Simulation reset');
   renderSelection();
@@ -853,6 +1002,7 @@ function drawTempLink(pointer) {
 }
 
 function log(message) {
+  state.eventLog.push({ day: state.day, message });
   const entry = document.createElement('div');
   entry.className = 'log-entry';
   entry.textContent = `Day ${state.day}: ${message}`;
@@ -951,7 +1101,10 @@ document.getElementById('playBtn').addEventListener('click', () => togglePlay(tr
 document.getElementById('pauseBtn').addEventListener('click', () => togglePlay(false));
 document.getElementById('resetBtn').addEventListener('click', resetSimulation);
 document.getElementById('tickSpeed').addEventListener('change', () => { if (state.timer) togglePlay(true); });
-document.getElementById('clearLogBtn').addEventListener('click', () => eventLog.innerHTML = '');
+document.getElementById('clearLogBtn').addEventListener('click', () => {
+  eventLog.innerHTML = '';
+  state.eventLog = [];
+});
 
 addNode('supplier', 80, 90);
 addNode('warehouse', 430, 120);
@@ -959,6 +1112,7 @@ addNode('plant', 800, 150);
 state.links.push({ id: `link-${state.linkCounter++}`, from: state.nodes[0].id, to: state.nodes[1].id });
 state.links.push({ id: `link-${state.linkCounter++}`, from: state.nodes[1].id, to: state.nodes[2].id });
 validateAll();
+initializeSimulationTracking();
 fitToGraph();
 updateStats();
 selectNodes([state.nodes[0].id]);
@@ -967,4 +1121,7 @@ log('Starter scenario loaded');
 window.SupplyChainFlowLab = {
   serializeGraph,
   getState: () => structuredClone({ nodes: state.nodes, links: state.links, graphErrors: state.graphErrors }),
+  stepSimulation,
+  simulateDays,
+  getSimulationOutput: buildSimulationOutput,
 };
