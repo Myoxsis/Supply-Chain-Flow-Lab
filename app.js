@@ -60,6 +60,14 @@ const GRID_SIZE = 24;
 const SCENARIO_STORAGE_KEY = 'supply-chain-flow-lab:scenario';
 const SCENARIO_VERSION = 6;
 
+
+function cloneValue(value) {
+  if (typeof globalThis.structuredClone === 'function') {
+    return globalThis.structuredClone(value);
+  }
+  return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
 const NODE_SCHEMAS = {
   supplier: {
     label: 'Supplier',
@@ -134,7 +142,7 @@ function createDefaultNodePackage() {
     name: 'SCFL-node',
     customNodes: [],
     folders: {
-      nodes: structuredClone(CORE_NODE_PACKAGE_ENTRIES),
+      nodes: cloneValue(CORE_NODE_PACKAGE_ENTRIES),
     },
   };
 }
@@ -352,7 +360,7 @@ function addNode(type, x = 80 + state.nodes.length * 40, y = 60 + state.nodes.le
     received: 0,
     shipped: 0,
     stockouts: 0,
-    initial: structuredClone(data),
+    initial: cloneValue(data),
     validationErrors: {},
   };
   initializeNodeRuntime(node);
@@ -1448,10 +1456,10 @@ function buildSimulationOutput() {
         preparingVolume: (warehouse.preparingShipments ?? []).reduce((sum, prep) => sum + prep.qty, 0),
       })),
     },
-    eventLog: structuredClone(state.eventLog),
-    inventoryTimeSeriesByNode: structuredClone(state.inventoryHistoryByNode),
-    shipmentsInTransitHistory: structuredClone(state.transitHistory),
-    kpiSummary: structuredClone(state.kpis),
+    eventLog: cloneValue(state.eventLog),
+    inventoryTimeSeriesByNode: cloneValue(state.inventoryHistoryByNode),
+    shipmentsInTransitHistory: cloneValue(state.transitHistory),
+    kpiSummary: cloneValue(state.kpis),
   };
 }
 
@@ -1523,7 +1531,7 @@ function resetSimulation() {
   state.day = 0;
   state.shipments = [];
   state.nodes.forEach((node) => {
-    Object.assign(node, structuredClone(node.initial));
+    Object.assign(node, cloneValue(node.initial));
     node.inventory = resolveInitialInventory(node.type, node);
     node.received = 0;
     node.shipped = 0;
@@ -1587,7 +1595,7 @@ function migrateScenario(rawScenario) {
     throw new Error(`Unsupported scenario version ${version}. This app supports up to version ${SCENARIO_VERSION}.`);
   }
 
-  const migrated = structuredClone(rawScenario);
+  const migrated = cloneValue(rawScenario);
 
   if (version < 2) {
     migrated.globalPythonCode = migrated.globalPythonCode ?? '';
@@ -1654,7 +1662,7 @@ function migrateScenario(rawScenario) {
       }
     });
   }
-  migrated.nodePackage.folders = { nodes: structuredClone(CORE_NODE_PACKAGE_ENTRIES) };
+  migrated.nodePackage.folders = { nodes: cloneValue(CORE_NODE_PACKAGE_ENTRIES) };
 
   migrated.version = SCENARIO_VERSION;
   return migrated;
@@ -1788,7 +1796,7 @@ function importScenarioObject(rawScenario, options = {}) {
       received: 0,
       shipped: 0,
       stockouts: 0,
-      initial: structuredClone(config),
+      initial: cloneValue(config),
       validationErrors: {},
     };
     initializeNodeRuntime(node);
@@ -1854,8 +1862,8 @@ function serializeGraph() {
     version: SCENARIO_VERSION,
     day: state.day,
     globalPythonCode: state.globalPythonCode,
-    ui: structuredClone(state.ui),
-    nodePackage: structuredClone(state.nodePackage),
+    ui: cloneValue(state.ui),
+    nodePackage: cloneValue(state.nodePackage),
     nodes: state.nodes.map((node) => {
       const schemaKeys = getNodeSchema(node.type).fields.map((f) => f.key);
       const config = schemaKeys.reduce((acc, key) => {
@@ -2214,11 +2222,11 @@ function copySelectedNodes() {
   const links = state.links.filter((link) => selectedNodeIds.has(link.from) && selectedNodeIds.has(link.to));
   state.clipboard = {
     nodes: selectedNodes.map((node) => ({
-      node: structuredClone(node),
+      node: cloneValue(node),
       offsetX: node.x - minX,
       offsetY: node.y - minY,
     })),
-    links: links.map((link) => structuredClone(link)),
+    links: links.map((link) => cloneValue(link)),
   };
   log(`Copied ${selectedNodes.length} node${selectedNodes.length > 1 ? 's' : ''}`);
   return true;
@@ -2232,14 +2240,14 @@ function pasteClipboard(options = {}) {
   const cloneMap = new Map();
   const pastedNodeIds = state.clipboard.nodes.map((entry, idx) => {
     const id = `node-${state.nodeCounter++}`;
-    const copy = structuredClone(entry.node);
+    const copy = cloneValue(entry.node);
     const next = snapPosition(entry.node.x + dx, entry.node.y + dy);
     copy.id = id;
     if (renameAsCopy) copy.name = `${entry.node.name} Copy`;
     copy.x = Math.max(16, next.x);
     copy.y = Math.max(16, next.y);
     copy.z = state.zCounter++;
-    copy.initial = structuredClone(copy.initial);
+    copy.initial = cloneValue(copy.initial);
     copy.validationErrors = {};
     cloneMap.set(entry.node.id, id);
     state.nodes.push(copy);
@@ -2252,7 +2260,7 @@ function pasteClipboard(options = {}) {
     const to = cloneMap.get(link.to);
     if (!from || !to) return;
     state.links.push({
-      ...structuredClone(link),
+      ...cloneValue(link),
       id: `link-${state.linkCounter++}`,
       from,
       to,
@@ -2670,13 +2678,13 @@ if (loadPresetBtn) {
   loadPresetBtn.addEventListener('click', () => {
     const preset = scenarioPresetSelect?.value ?? 'blank';
     if (!BUILT_IN_SCENARIOS[preset]) return;
-    importScenarioObject(structuredClone(BUILT_IN_SCENARIOS[preset]), { logMessage: `${preset === 'demo' ? 'Demo' : 'Blank'} scenario loaded` });
+    importScenarioObject(cloneValue(BUILT_IN_SCENARIOS[preset]), { logMessage: `${preset === 'demo' ? 'Demo' : 'Blank'} scenario loaded` });
     persistScenarioToLocalStorage();
   });
 }
 if (resetScenarioBtn) {
   resetScenarioBtn.addEventListener('click', () => {
-    importScenarioObject(structuredClone(BUILT_IN_SCENARIOS.blank), { logMessage: 'Scenario reset to blank' });
+    importScenarioObject(cloneValue(BUILT_IN_SCENARIOS.blank), { logMessage: 'Scenario reset to blank' });
     persistScenarioToLocalStorage();
   });
 }
@@ -2842,7 +2850,7 @@ navItems.forEach((item) => {
 });
 startScenarioAutosave();
 if (!loadScenarioFromLocalStorage()) {
-  importScenarioObject(structuredClone(BUILT_IN_SCENARIOS.demo), { logMessage: 'Built-in demo scenario loaded' });
+  importScenarioObject(cloneValue(BUILT_IN_SCENARIOS.demo), { logMessage: 'Built-in demo scenario loaded' });
   persistScenarioToLocalStorage();
 }
 
@@ -2850,8 +2858,8 @@ window.SupplyChainFlowLab = {
   serializeGraph,
   importScenarioObject,
   migrateScenario,
-  loadBuiltInScenario: (name) => importScenarioObject(structuredClone(BUILT_IN_SCENARIOS[name] ?? BUILT_IN_SCENARIOS.blank)),
-  getState: () => structuredClone({ nodes: state.nodes, links: state.links, graphErrors: state.graphErrors, globalPythonCode: state.globalPythonCode }),
+  loadBuiltInScenario: (name) => importScenarioObject(cloneValue(BUILT_IN_SCENARIOS[name] ?? BUILT_IN_SCENARIOS.blank)),
+  getState: () => cloneValue({ nodes: state.nodes, links: state.links, graphErrors: state.graphErrors, globalPythonCode: state.globalPythonCode }),
   stepSimulation,
   simulateDays,
   getSimulationOutput: buildSimulationOutput,
