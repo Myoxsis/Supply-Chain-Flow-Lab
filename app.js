@@ -95,7 +95,6 @@ const NODE_SCHEMAS = {
         ],
         defaultValue: 'stockout_count',
       },
-      { key: 'pythonCode', label: 'Python code (node level)', type: 'text', required: false, defaultValue: '' },
     ],
   },
 };
@@ -106,6 +105,7 @@ const state = {
   shipments: [],
   eventLog: [],
   inventoryHistoryByNode: {},
+  analyticsMetricHistoryByNode: {},
   transitHistory: [],
   deliveryStats: { dispatched: 0, onTime: 0, deliveredVolume: 0, shipmentCost: 0 },
   shipmentsByDay: [],
@@ -352,12 +352,19 @@ function getNodeBody(node) {
       </div>`,
     analytics: `
       <div class="kpis">
-        <div class="kpi"><span class="label">Metric</span><span class="value">${node.metric}</span></div>
-        <div class="kpi"><span class="label">Python lines</span><span class="value">${(node.pythonCode || '').split('\n').filter((line) => line.trim()).length}</span></div>
+        <div class="kpi"><span class="label">Metric</span><span class="value" data-kpi="metric-value">${readMetricValue(node)}</span></div>
+        <div class="kpi"><span class="label">Trend points</span><span class="value" data-kpi="metric-points">${state.analyticsMetricHistoryByNode[node.id]?.length ?? 0}</span></div>
       </div>`,
   };
 
-  return `${fieldsHtml}${commonKpis[node.type]}`;
+  const analyticsGraph = node.type === 'analytics'
+    ? `<div class="field analytics-node-graph">
+        <label>Metric trend</label>
+        <svg class="analytics-node-chart" data-analytics-chart="${node.id}" viewBox="0 0 240 84" preserveAspectRatio="none"></svg>
+      </div>`
+    : '';
+
+  return `${fieldsHtml}${analyticsGraph}${commonKpis[node.type]}`;
 }
 
 function bindFieldEvents(body, node) {
@@ -531,6 +538,7 @@ function refreshNode(nodeId) {
   applyNodeStyles(node);
   renderAnalyticsNodeOptions();
   drawLinks();
+  renderAnalytics();
 }
 
 function deleteNodes(nodeIds) {
@@ -539,6 +547,10 @@ function deleteNodes(nodeIds) {
   state.nodes = state.nodes.filter((n) => !idSet.has(n.id));
   state.links = state.links.filter((l) => !idSet.has(l.from) && !idSet.has(l.to));
   state.shipments = state.shipments.filter((s) => !idSet.has(s.from) && !idSet.has(s.to));
+  nodeIds.forEach((nodeId) => {
+    delete state.inventoryHistoryByNode[nodeId];
+    delete state.analyticsMetricHistoryByNode[nodeId];
+  });
   nodeIds.forEach((nodeId) => getNodeElement(nodeId)?.remove());
   state.selectedNodeIds = state.selectedNodeIds.filter((id) => !idSet.has(id));
   if (!state.selectedNodeIds.length && state.nodes.length) state.selectedNodeIds = [state.nodes[0].id];
@@ -903,6 +915,10 @@ function refreshSimulationNodeViews() {
     if (shippedEl) shippedEl.textContent = node.shipped;
     const stockoutsEl = el.querySelector('[data-kpi="stockouts"]');
     if (stockoutsEl) stockoutsEl.textContent = node.stockouts;
+    const metricValueEl = el.querySelector('[data-kpi="metric-value"]');
+    if (metricValueEl) metricValueEl.textContent = readMetricValue(node);
+    const metricPointsEl = el.querySelector('[data-kpi="metric-points"]');
+    if (metricPointsEl) metricPointsEl.textContent = state.analyticsMetricHistoryByNode[node.id]?.length ?? 0;
   });
 }
 
@@ -1164,6 +1180,7 @@ function initializeSimulationTracking() {
   }
   eventLog.innerHTML = '';
   state.inventoryHistoryByNode = {};
+  state.analyticsMetricHistoryByNode = {};
   state.transitHistory = [];
   state.deliveryStats = { dispatched: 0, onTime: 0, deliveredVolume: 0, shipmentCost: 0 };
   state.shipmentsByDay = [];
@@ -1174,8 +1191,10 @@ function initializeSimulationTracking() {
       inventory: Number.isFinite(node.inventory) ? node.inventory : null,
       onHandLabel: Number.isFinite(node.inventory) ? node.inventory : '∞',
     }];
+    if (node.type === 'analytics') state.analyticsMetricHistoryByNode[node.id] = [];
   });
   computeKpis();
+  recordAnalyticsMetricHistory();
   renderAnalyticsNodeOptions();
   renderAnalytics();
 }
@@ -1207,6 +1226,7 @@ function clearGraph() {
   state.selectedNodeIds = [];
   state.selectedLinkIds = [];
   state.analyticsNodeId = null;
+  state.analyticsMetricHistoryByNode = {};
   state.graphErrors = [];
   workspace.querySelectorAll('.node-card').forEach((el) => el.remove());
   drawLinks();
@@ -1424,6 +1444,7 @@ function updateStats() {
   transitValue.textContent = state.shipments.length;
   if (tickSpeedValue) tickSpeedValue.textContent = `${state.simulation.speedMs} ms/day`;
   updateSimulationControls();
+  recordAnalyticsMetricHistory();
   renderAnalytics();
 }
 
@@ -1448,6 +1469,7 @@ function renderAnalytics() {
   renderKpiBar();
   renderInventoryChart();
   renderShipmentChart();
+  renderAnalyticsNodeCharts();
 }
 
 function getPrimaryAnalyticsSource(analyticsNode) {
@@ -1479,6 +1501,58 @@ function readMetricValue(analyticsNode) {
     default:
       return '—';
   }
+}
+
+function readMetricNumericValue(analyticsNode) {
+  const source = getPrimaryAnalyticsSource(analyticsNode);
+  switch (analyticsNode.metric) {
+    case 'stockout_count':
+      return state.kpis.stockoutCount;
+    case 'avg_plant_inventory':
+      return state.kpis.averagePlantInventory;
+    case 'warehouse_utilization':
+      return Number((state.kpis.warehouseUtilization * 100).toFixed(2));
+    case 'on_time_rate':
+      return Number((state.kpis.onTimeDeliveries.rate * 100).toFixed(2));
+    case 'total_shipped':
+      return state.kpis.totalShippedVolume;
+    case 'shipments_today':
+      return state.shipmentsByDay.at(-1)?.count ?? 0;
+    case 'node_inventory':
+      return source && Number.isFinite(source.inventory) ? source.inventory : null;
+    case 'node_shipped':
+      return source ? source.shipped : null;
+    case 'node_stockouts':
+      return source ? source.stockouts : null;
+    default:
+      return null;
+  }
+}
+
+function recordAnalyticsMetricHistory() {
+  state.nodes.filter((node) => node.type === 'analytics').forEach((node) => {
+    if (!state.analyticsMetricHistoryByNode[node.id]) state.analyticsMetricHistoryByNode[node.id] = [];
+    const bucket = state.analyticsMetricHistoryByNode[node.id];
+    const value = readMetricNumericValue(node);
+    if (!Number.isFinite(value)) return;
+    const last = bucket.at(-1);
+    if (last?.day === state.day) {
+      last.value = value;
+      return;
+    }
+    bucket.push({ day: state.day, value });
+  });
+}
+
+function renderAnalyticsNodeCharts() {
+  state.nodes.filter((node) => node.type === 'analytics').forEach((node) => {
+    const el = getNodeElement(node.id);
+    if (!el) return;
+    const svg = el.querySelector(`[data-analytics-chart="${node.id}"]`);
+    if (!svg) return;
+    const points = (state.analyticsMetricHistoryByNode[node.id] ?? []).map((pt) => ({ x: pt.day, y: pt.value }));
+    drawCompactNodeChart(svg, points);
+  });
 }
 
 function renderKpiBar() {
@@ -1562,6 +1636,28 @@ function drawLineChart(svg, config) {
     const cy = toY(marker.y);
     svg.insertAdjacentHTML('beforeend', `<circle class="stockout-marker" cx="${cx}" cy="${cy}" r="4" />`);
   });
+}
+
+function drawCompactNodeChart(svg, points) {
+  const width = 240;
+  const height = 84;
+  const pad = { top: 8, right: 8, bottom: 12, left: 8 };
+  const chartW = width - pad.left - pad.right;
+  const chartH = height - pad.top - pad.bottom;
+  svg.innerHTML = '';
+
+  if (!points.length) {
+    svg.innerHTML = '<text x="50%" y="50%" text-anchor="middle" class="empty-chart-label">Run simulation</text>';
+    return;
+  }
+
+  const xMin = Math.min(...points.map((p) => p.x));
+  const xMax = Math.max(...points.map((p) => p.x));
+  const yMax = Math.max(1, ...points.map((p) => p.y));
+  const toX = (x) => pad.left + ((x - xMin) / Math.max(1, xMax - xMin)) * chartW;
+  const toY = (y) => pad.top + chartH - (y / yMax) * chartH;
+  const polyline = points.map((point) => `${toX(point.x)},${toY(point.y)}`).join(' ');
+  svg.insertAdjacentHTML('beforeend', `<polyline class="chart-line inventory compact-node-line" points="${polyline}" />`);
 }
 
 function getNode(id) { return state.nodes.find((n) => n.id === id); }
