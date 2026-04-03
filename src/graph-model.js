@@ -1,6 +1,6 @@
 /** @typedef {'supplier'|'warehouse'|'plant'|'analytics'} NodeType */
 
-export const SCENARIO_VERSION = 5;
+export const SCENARIO_VERSION = 6;
 
 export const COST_CATEGORY_KEYS = {
   supplierShipment: 'supplierShipment',
@@ -173,6 +173,14 @@ export function migrateScenario(rawScenario) {
       return node;
     });
   }
+  if (version < 6) {
+    migrated.meta = {
+      ...(migrated.meta ?? {}),
+      label: typeof migrated.meta?.label === 'string' ? migrated.meta.label : 'Imported scenario',
+      savedAt: typeof migrated.meta?.savedAt === 'string' ? migrated.meta.savedAt : null,
+      checksum: typeof migrated.meta?.checksum === 'string' ? migrated.meta.checksum : null,
+    };
+  }
 
   migrated.ui = {
     showLinkLabels: Boolean(migrated.ui?.showLinkLabels),
@@ -180,6 +188,11 @@ export function migrateScenario(rawScenario) {
     allowPlantOutbound: Boolean(migrated.ui?.allowPlantOutbound),
     showCreateToolbar: migrated.ui?.showCreateToolbar !== false,
     snapToGrid: Boolean(migrated.ui?.snapToGrid),
+  };
+  migrated.meta = {
+    label: typeof migrated.meta?.label === 'string' ? migrated.meta.label : 'Untitled scenario',
+    savedAt: typeof migrated.meta?.savedAt === 'string' ? migrated.meta.savedAt : null,
+    checksum: typeof migrated.meta?.checksum === 'string' ? migrated.meta.checksum : null,
   };
   migrated.version = SCENARIO_VERSION;
   return migrated;
