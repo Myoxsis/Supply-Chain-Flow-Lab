@@ -130,6 +130,47 @@ input[type="range"] { width: 100%; margin-top: 8px; }
 .workspace-topbar {
   display: flex; justify-content: space-between; align-items: center; padding: 10px 14px;
   border-bottom: 1px solid var(--border); background: rgba(12,15,22,.86); backdrop-filter: blur(12px);
+  gap: 10px;
+}
+.topbar-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+.sim-controls-inline {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid #2f3a4d;
+  background: rgba(16, 22, 32, 0.84);
+}
+.sim-inline-actions,
+.sim-inline-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.sim-inline-meta {
+  color: var(--muted);
+  font-size: 12px;
+}
+.sim-inline-meta strong {
+  color: var(--text);
+  font-weight: 700;
+}
+.sim-speed-inline {
+  margin: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.sim-speed-inline input[type="range"] {
+  margin: 0;
+  width: 120px;
 }
 .graph-edit-toolbar {
   display: flex;
@@ -154,6 +195,16 @@ input[type="range"] { width: 100%; margin-top: 8px; }
 .dot.supplier { background: var(--supplier); }
 .dot.warehouse { background: var(--warehouse); }
 .dot.plant { background: var(--plant); }
+@media (max-width: 1280px) {
+  .workspace-topbar {
+    flex-wrap: wrap;
+    align-items: flex-start;
+  }
+  .topbar-controls {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}
 .workspace {
   position: relative; overflow: hidden;
   background:
