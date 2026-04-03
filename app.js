@@ -8,6 +8,7 @@ const nodeTemplate = document.getElementById('nodeTemplate');
 const selectionPanel = document.getElementById('selectionPanel');
 const dayValue = document.getElementById('dayValue');
 const transitValue = document.getElementById('transitValue');
+const simStatusValue = document.getElementById('simStatusValue');
 const eventLog = document.getElementById('eventLog');
 const tempWire = document.getElementById('tempWire');
 const kpiBar = document.getElementById('kpiBar');
@@ -24,6 +25,8 @@ const resetScenarioBtn = document.getElementById('resetScenarioBtn');
 const exportScenarioBtn = document.getElementById('exportScenarioBtn');
 const importScenarioBtn = document.getElementById('importScenarioBtn');
 const importScenarioInput = document.getElementById('importScenarioInput');
+const tickSpeedInput = document.getElementById('tickSpeed');
+const tickSpeedValue = document.getElementById('tickSpeedValue');
 const canvasContextActions = canvasContextMenu?.querySelector('.canvas-context-actions');
 const canvasContextEmpty = canvasContextMenu?.querySelector('.context-empty');
 const tempLinkPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
@@ -123,7 +126,14 @@ const state = {
   linking: null,
   selectedNodeIds: [],
   selectedLinkIds: [],
-  timer: null,
+  simulation: {
+    status: 'idle',
+    timerId: null,
+    speedMs: 800,
+    tickInProgress: false,
+  },
+  logBuffer: [],
+  logFlushHandle: null,
   nodeCounter: 1,
   linkCounter: 1,
   zCounter: 1,
@@ -327,18 +337,18 @@ function getNodeBody(node) {
   const commonKpis = {
     supplier: `
       <div class="kpis">
-        <div class="kpi"><span class="label">Shipped</span><span class="value">${node.shipped}</span></div>
+        <div class="kpi"><span class="label">Shipped</span><span class="value" data-kpi="shipped">${node.shipped}</span></div>
         <div class="kpi"><span class="label">Frequency</span><span class="value">${node.deliveryFrequencyDays} d</span></div>
       </div>`,
     warehouse: `
       <div class="kpis">
-        <div class="kpi"><span class="label">On hand</span><span class="value">${node.inventory}</span></div>
-        <div class="kpi"><span class="label">Shipped</span><span class="value">${node.shipped}</span></div>
+        <div class="kpi"><span class="label">On hand</span><span class="value" data-kpi="inventory">${Number.isFinite(node.inventory) ? node.inventory : '∞'}</span></div>
+        <div class="kpi"><span class="label">Shipped</span><span class="value" data-kpi="shipped">${node.shipped}</span></div>
       </div>`,
     plant: `
       <div class="kpis">
-        <div class="kpi"><span class="label">On hand</span><span class="value">${node.inventory}</span></div>
-        <div class="kpi"><span class="label">Stockouts</span><span class="value">${node.stockouts}</span></div>
+        <div class="kpi"><span class="label">On hand</span><span class="value" data-kpi="inventory">${Number.isFinite(node.inventory) ? node.inventory : '∞'}</span></div>
+        <div class="kpi"><span class="label">Stockouts</span><span class="value" data-kpi="stockouts">${node.stockouts}</span></div>
       </div>`,
     analytics: `
       <div class="kpis">
@@ -824,7 +834,7 @@ function renderSelection() {
       <div class="selection-row"><span>Type</span><strong>${node.type}</strong></div>
       <div class="selection-row"><span>Incoming</span><strong>${incoming}</strong></div>
       <div class="selection-row"><span>Outgoing</span><strong>${outgoing}</strong></div>
-      ${node.type !== 'analytics' ? `<div class="selection-row"><span>Inventory</span><strong>${Number.isFinite(node.inventory) ? node.inventory : '∞'}</strong></div>` : ''}
+      ${node.type !== 'analytics' ? `<div class="selection-row"><span>Current simulated inventory</span><strong>${Number.isFinite(node.inventory) ? node.inventory : '∞'}</strong></div>` : ''}
       ${node.type === 'supplier' ? `<div class="selection-row"><span>Frequency</span><strong>${node.deliveryFrequencyDays} days</strong></div>` : ''}
       ${node.type === 'warehouse' ? `<div class="selection-row"><span>Prep + Delivery</span><strong>${node.preparationTimeDays + node.deliveryToPlantDays} days</strong></div>` : ''}
       ${node.type === 'plant' ? `<div class="selection-row"><span>Consumption</span><strong>${node.consumptionRatePerDay}/day</strong></div>` : ''}
@@ -838,17 +848,76 @@ function canRunSimulation() {
   validateAll();
   if (!hasValidationErrors()) return true;
   log('Simulation blocked: resolve validation errors first.');
+  setSimulationStatus('paused');
   renderSelection();
   state.nodes.forEach((n) => refreshNode(n.id));
   return false;
 }
 
-function stepSimulation() {
-  if (!canRunSimulation()) return;
+const ALLOWED_SIMULATION_TRANSITIONS = {
+  idle: ['running'],
+  running: ['paused', 'idle'],
+  paused: ['running', 'idle'],
+};
+
+function setSimulationStatus(nextStatus) {
+  const current = state.simulation.status;
+  if (current === nextStatus) {
+    updateSimulationControls();
+    return true;
+  }
+  if (!(ALLOWED_SIMULATION_TRANSITIONS[current] ?? []).includes(nextStatus)) return false;
+
+  state.simulation.status = nextStatus;
+  if (nextStatus !== 'running' && state.simulation.timerId) {
+    clearTimeout(state.simulation.timerId);
+    state.simulation.timerId = null;
+  }
+  updateSimulationControls();
+  return true;
+}
+
+function updateSimulationControls() {
+  const status = state.simulation.status;
+  const startBtn = document.getElementById('startBtn');
+  const pauseBtn = document.getElementById('pauseBtn');
+  const resumeBtn = document.getElementById('resumeBtn');
+  const stepBtn = document.getElementById('stepBtn');
+  const resetBtn = document.getElementById('resetBtn');
+
+  if (simStatusValue) simStatusValue.textContent = status[0].toUpperCase() + status.slice(1);
+  if (startBtn) startBtn.disabled = status !== 'idle';
+  if (pauseBtn) pauseBtn.disabled = status !== 'running';
+  if (resumeBtn) resumeBtn.disabled = status !== 'paused';
+  if (stepBtn) stepBtn.disabled = status === 'running';
+  if (resetBtn) resetBtn.disabled = false;
+}
+
+function refreshSimulationNodeViews() {
+  state.nodes.forEach((node) => {
+    const el = getNodeElement(node.id);
+    if (!el) return;
+    const inventoryEl = el.querySelector('[data-kpi="inventory"]');
+    if (inventoryEl) inventoryEl.textContent = Number.isFinite(node.inventory) ? node.inventory : '∞';
+    const shippedEl = el.querySelector('[data-kpi="shipped"]');
+    if (shippedEl) shippedEl.textContent = node.shipped;
+    const stockoutsEl = el.querySelector('[data-kpi="stockouts"]');
+    if (stockoutsEl) stockoutsEl.textContent = node.stockouts;
+  });
+}
+
+function runOneSimulationDay() {
+  if (!canRunSimulation()) return false;
   simulateDay();
   updateStats();
-  state.nodes.forEach((n) => refreshNode(n.id));
+  refreshSimulationNodeViews();
   renderSelection();
+  return true;
+}
+
+function stepSimulation() {
+  if (state.simulation.status === 'running') return;
+  runOneSimulationDay();
 }
 
 function simulateDay() {
@@ -1026,7 +1095,7 @@ function simulateDays(days) {
   if (!Number.isInteger(totalDays) || totalDays < 0) throw new Error('days must be a non-negative integer');
   for (let i = 0; i < totalDays; i += 1) simulateDay();
   updateStats();
-  state.nodes.forEach((n) => refreshNode(n.id));
+  refreshSimulationNodeViews();
   renderSelection();
   return buildSimulationOutput();
 }
@@ -1086,7 +1155,14 @@ function queueShipment(from, to, link, qty, leadTime) {
 }
 
 function initializeSimulationTracking() {
+  setSimulationStatus('idle');
   state.eventLog = [];
+  state.logBuffer = [];
+  if (state.logFlushHandle) {
+    cancelAnimationFrame(state.logFlushHandle);
+    state.logFlushHandle = null;
+  }
+  eventLog.innerHTML = '';
   state.inventoryHistoryByNode = {};
   state.transitHistory = [];
   state.deliveryStats = { dispatched: 0, onTime: 0, deliveredVolume: 0, shipmentCost: 0 };
@@ -1105,6 +1181,7 @@ function initializeSimulationTracking() {
 }
 
 function resetSimulation() {
+  setSimulationStatus('idle');
   state.day = 0;
   state.shipments = [];
   state.nodes.forEach((node) => {
@@ -1123,6 +1200,7 @@ function resetSimulation() {
 }
 
 function clearGraph() {
+  setSimulationStatus('idle');
   state.nodes = [];
   state.links = [];
   state.shipments = [];
@@ -1344,6 +1422,8 @@ function startScenarioAutosave() {
 function updateStats() {
   dayValue.textContent = state.day;
   transitValue.textContent = state.shipments.length;
+  if (tickSpeedValue) tickSpeedValue.textContent = `${state.simulation.speedMs} ms/day`;
+  updateSimulationControls();
   renderAnalytics();
 }
 
@@ -1709,20 +1789,71 @@ function drawTempLink(pointer) {
 
 function log(message) {
   state.eventLog.push({ day: state.day, message });
-  const entry = document.createElement('div');
-  entry.className = 'log-entry';
-  entry.textContent = `Day ${state.day}: ${message}`;
-  eventLog.prepend(entry);
+  state.logBuffer.push({ day: state.day, message });
+  if (!state.logFlushHandle) {
+    state.logFlushHandle = window.requestAnimationFrame(flushEventLogBuffer);
+  }
 }
 
-function togglePlay(play) {
-  clearInterval(state.timer);
-  state.timer = null;
-  if (play) {
-    if (!canRunSimulation()) return;
-    const speed = Number(document.getElementById('tickSpeed').value);
-    state.timer = setInterval(stepSimulation, speed);
+function flushEventLogBuffer() {
+  state.logFlushHandle = null;
+  if (!state.logBuffer.length) return;
+  const entries = state.logBuffer.splice(0);
+  const fragment = document.createDocumentFragment();
+  entries.forEach((item) => {
+    const entry = document.createElement('div');
+    entry.className = 'log-entry';
+    entry.textContent = `Day ${item.day}: ${item.message}`;
+    fragment.prepend(entry);
+  });
+  eventLog.prepend(fragment);
+  while (eventLog.childElementCount > 600) {
+    eventLog.lastElementChild?.remove();
   }
+}
+
+function scheduleNextSimulationTick() {
+  if (state.simulation.status !== 'running') return;
+  if (state.simulation.timerId) clearTimeout(state.simulation.timerId);
+  state.simulation.timerId = setTimeout(runSimulationTick, state.simulation.speedMs);
+}
+
+function runSimulationTick() {
+  state.simulation.timerId = null;
+  if (state.simulation.status !== 'running') return;
+  if (state.simulation.tickInProgress) {
+    scheduleNextSimulationTick();
+    return;
+  }
+
+  state.simulation.tickInProgress = true;
+  window.requestAnimationFrame(() => {
+    const ok = runOneSimulationDay();
+    state.simulation.tickInProgress = false;
+    if (!ok) {
+      setSimulationStatus('paused');
+      return;
+    }
+    scheduleNextSimulationTick();
+  });
+}
+
+function startSimulation() {
+  if (state.simulation.status !== 'idle') return;
+  if (!canRunSimulation()) return;
+  setSimulationStatus('running');
+  scheduleNextSimulationTick();
+}
+
+function pauseSimulation() {
+  setSimulationStatus('paused');
+}
+
+function resumeSimulation() {
+  if (state.simulation.status !== 'paused') return;
+  if (!canRunSimulation()) return;
+  setSimulationStatus('running');
+  scheduleNextSimulationTick();
 }
 
 workspace.addEventListener('pointerdown', (e) => {
@@ -1849,9 +1980,10 @@ document.getElementById('clearLinks').addEventListener('click', () => {
   log('All links cleared');
   renderSelection();
 });
+document.getElementById('startBtn').addEventListener('click', startSimulation);
+document.getElementById('resumeBtn').addEventListener('click', resumeSimulation);
+document.getElementById('pauseBtn').addEventListener('click', pauseSimulation);
 document.getElementById('stepBtn').addEventListener('click', stepSimulation);
-document.getElementById('playBtn').addEventListener('click', () => togglePlay(true));
-document.getElementById('pauseBtn').addEventListener('click', () => togglePlay(false));
 document.getElementById('resetBtn').addEventListener('click', resetSimulation);
 if (loadPresetBtn) {
   loadPresetBtn.addEventListener('click', () => {
@@ -1900,7 +2032,15 @@ if (importScenarioBtn && importScenarioInput) {
     }
   });
 }
-document.getElementById('tickSpeed').addEventListener('change', () => { if (state.timer) togglePlay(true); });
+if (tickSpeedInput) {
+  tickSpeedInput.addEventListener('input', (e) => {
+    const next = Number(e.target.value);
+    if (!Number.isFinite(next)) return;
+    state.simulation.speedMs = next;
+    if (tickSpeedValue) tickSpeedValue.textContent = `${state.simulation.speedMs} ms/day`;
+    if (state.simulation.status === 'running') scheduleNextSimulationTick();
+  });
+}
 analyticsNodeSelect.addEventListener('change', (e) => {
   state.analyticsNodeId = e.target.value;
   renderInventoryChart();
@@ -1908,6 +2048,11 @@ analyticsNodeSelect.addEventListener('change', (e) => {
 document.getElementById('clearLogBtn').addEventListener('click', () => {
   eventLog.innerHTML = '';
   state.eventLog = [];
+  state.logBuffer = [];
+  if (state.logFlushHandle) {
+    cancelAnimationFrame(state.logFlushHandle);
+    state.logFlushHandle = null;
+  }
 });
 globalPythonCodeEl.addEventListener('input', (e) => {
   state.globalPythonCode = e.target.value;
