@@ -78,6 +78,26 @@
         </div>
       </header>
 
+      <section class="analytics-panel">
+        <div id="kpiBar" class="kpi-bar"></div>
+        <div class="chart-grid">
+          <article class="chart-card">
+            <div class="chart-header">
+              <h3>Inventory over time</h3>
+              <select id="analyticsNodeSelect" aria-label="Select node for inventory chart"></select>
+            </div>
+            <svg id="inventoryChart" class="chart-svg" viewBox="0 0 640 180" preserveAspectRatio="none"></svg>
+          </article>
+          <article class="chart-card">
+            <div class="chart-header">
+              <h3>Shipment counts over time</h3>
+              <span class="chart-meta">Dispatched/day</span>
+            </div>
+            <svg id="shipmentChart" class="chart-svg" viewBox="0 0 640 180" preserveAspectRatio="none"></svg>
+          </article>
+        </div>
+      </section>
+
       <section id="workspace" class="workspace">
         <svg id="linksSvg" class="links" aria-hidden="true"></svg>
         <div id="tempWire" class="temp-wire-label hidden">Linking...</div>

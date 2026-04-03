@@ -6,6 +6,10 @@ const dayValue = document.getElementById('dayValue');
 const transitValue = document.getElementById('transitValue');
 const eventLog = document.getElementById('eventLog');
 const tempWire = document.getElementById('tempWire');
+const kpiBar = document.getElementById('kpiBar');
+const inventoryChart = document.getElementById('inventoryChart');
+const shipmentChart = document.getElementById('shipmentChart');
+const analyticsNodeSelect = document.getElementById('analyticsNodeSelect');
 const tempLinkPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
 tempLinkPath.setAttribute('class', 'link-path temp-link hidden');
 linksSvg.appendChild(tempLinkPath);
@@ -58,6 +62,9 @@ const state = {
   inventoryHistoryByNode: {},
   transitHistory: [],
   deliveryStats: { dispatched: 0, onTime: 0, deliveredVolume: 0 },
+  shipmentsByDay: [],
+  stockoutEvents: [],
+  analyticsNodeId: null,
   kpis: {
     stockoutCount: 0,
     averagePlantInventory: 0,
@@ -109,8 +116,10 @@ function addNode(type, x = 80 + state.nodes.length * 40, y = 60 + state.nodes.le
     validationErrors: {},
   };
   state.nodes.push(node);
+  if (!state.analyticsNodeId) state.analyticsNodeId = node.id;
   validateAll();
   renderNode(node);
+  renderAnalyticsNodeOptions();
   selectNodes([node.id]);
   drawLinks();
 }
@@ -297,6 +306,7 @@ function refreshNode(nodeId) {
   bindFieldEvents(body, node);
   el.querySelector('.node-title').value = node.name;
   applyNodeStyles(node);
+  renderAnalyticsNodeOptions();
   drawLinks();
 }
 
@@ -310,9 +320,13 @@ function deleteNodes(nodeIds) {
   state.selectedNodeIds = state.selectedNodeIds.filter((id) => !idSet.has(id));
   if (!state.selectedNodeIds.length && state.nodes.length) state.selectedNodeIds = [state.nodes[0].id];
   state.selectedLinkIds = [];
+  if (nodeIds.includes(state.analyticsNodeId)) {
+    state.analyticsNodeId = state.nodes[0]?.id ?? null;
+  }
   validateAll();
   drawLinks();
   renderSelection();
+  renderAnalyticsNodeOptions();
   updateStats();
 }
 
@@ -582,6 +596,7 @@ function stepSimulation() {
 
 function simulateDay() {
   state.day += 1;
+  state.shipmentsByDay.push({ day: state.day, count: 0, volume: 0 });
   processArrivals();
   suppliersShip();
   warehousesDispatch();
@@ -660,6 +675,7 @@ function plantsConsume() {
     const shortfall = Math.abs(plant.inventory);
     plant.inventory = 0;
     plant.stockouts += 1;
+    state.stockoutEvents.push({ day: state.day, nodeId: plant.id, shortfall });
     log(`${plant.name} stockout (${shortfall} units short)`);
   });
 }
@@ -769,6 +785,11 @@ function buildSimulationOutput() {
 
 function queueShipment(from, to, qty, leadTime) {
   state.deliveryStats.dispatched += 1;
+  const dayBucket = state.shipmentsByDay[state.shipmentsByDay.length - 1];
+  if (dayBucket) {
+    dayBucket.count += 1;
+    dayBucket.volume += qty;
+  }
   state.shipments.push({
     from: from.id,
     to: to.id,
@@ -785,6 +806,8 @@ function initializeSimulationTracking() {
   state.inventoryHistoryByNode = {};
   state.transitHistory = [];
   state.deliveryStats = { dispatched: 0, onTime: 0, deliveredVolume: 0 };
+  state.shipmentsByDay = [];
+  state.stockoutEvents = [];
   state.nodes.forEach((node) => {
     state.inventoryHistoryByNode[node.id] = [{
       day: state.day,
@@ -793,6 +816,8 @@ function initializeSimulationTracking() {
     }];
   });
   computeKpis();
+  renderAnalyticsNodeOptions();
+  renderAnalytics();
 }
 
 function resetSimulation() {
@@ -832,6 +857,119 @@ function serializeGraph() {
 function updateStats() {
   dayValue.textContent = state.day;
   transitValue.textContent = state.shipments.length;
+  renderAnalytics();
+}
+
+function renderAnalyticsNodeOptions() {
+  const previous = state.analyticsNodeId;
+  analyticsNodeSelect.innerHTML = state.nodes
+    .map((node) => `<option value="${node.id}">${node.name} (${node.type})</option>`)
+    .join('');
+  if (!state.nodes.length) {
+    state.analyticsNodeId = null;
+    return;
+  }
+  if (!state.nodes.some((n) => n.id === previous)) {
+    state.analyticsNodeId = state.nodes[0].id;
+  } else {
+    state.analyticsNodeId = previous;
+  }
+  analyticsNodeSelect.value = state.analyticsNodeId;
+}
+
+function renderAnalytics() {
+  renderKpiBar();
+  renderInventoryChart();
+  renderShipmentChart();
+}
+
+function renderKpiBar() {
+  const plants = state.nodes.filter((n) => n.type === 'plant');
+  const warehouses = state.nodes.filter((n) => n.type === 'warehouse');
+  const stockoutPlants = new Set(state.stockoutEvents.map((e) => e.nodeId)).size;
+  const recentShipmentCount = state.shipmentsByDay.at(-1)?.count ?? 0;
+  const utilizationRows = warehouses
+    .map((warehouse) => {
+      const history = state.inventoryHistoryByNode[warehouse.id] ?? [];
+      if (!history.length || !warehouse.storageCapacity) return null;
+      const avg = history.reduce((sum, pt) => sum + (pt.inventory ?? 0), 0) / history.length;
+      return `<div class="selection-row"><span>${warehouse.name}</span><strong>${Math.round((avg / warehouse.storageCapacity) * 100)}%</strong></div>`;
+    })
+    .filter(Boolean)
+    .join('');
+
+  kpiBar.innerHTML = `
+    <div class="kpi-pill"><span>Stockout events</span><strong>${state.kpis.stockoutCount}</strong></div>
+    <div class="kpi-pill"><span>Plants hit</span><strong>${stockoutPlants}/${plants.length}</strong></div>
+    <div class="kpi-pill"><span>Avg plant inventory</span><strong>${Math.round(state.kpis.averagePlantInventory)}</strong></div>
+    <div class="kpi-pill"><span>Warehouse utilization</span><strong>${Math.round(state.kpis.warehouseUtilization * 100)}%</strong></div>
+    <div class="kpi-pill"><span>Total shipped</span><strong>${state.kpis.totalShippedVolume}</strong></div>
+    <div class="kpi-pill"><span>Shipments today</span><strong>${recentShipmentCount}</strong></div>
+    ${utilizationRows ? `<div class="kpi-pill" style="grid-column: 1 / -1;"><span>Warehouse utilization by node</span><div class="selection-grid">${utilizationRows}</div></div>` : ''}
+  `;
+}
+
+function renderInventoryChart() {
+  const nodeId = state.analyticsNodeId;
+  const history = nodeId ? (state.inventoryHistoryByNode[nodeId] ?? []) : [];
+  const stockoutsForNode = state.stockoutEvents.filter((event) => event.nodeId === nodeId);
+  drawLineChart(inventoryChart, {
+    points: history.map((pt) => ({ x: pt.day, y: pt.inventory ?? 0 })),
+    className: 'inventory',
+    yLabel: 'Inventory',
+    emptyLabel: 'Run simulation to see inventory history.',
+    markers: stockoutsForNode.map((event) => ({ x: event.day, y: 0 })),
+  });
+}
+
+function renderShipmentChart() {
+  drawLineChart(shipmentChart, {
+    points: state.shipmentsByDay.map((pt) => ({ x: pt.day, y: pt.count })),
+    className: 'shipments',
+    yLabel: 'Shipments/day',
+    emptyLabel: 'Run simulation to see shipment counts.',
+  });
+}
+
+function drawLineChart(svg, config) {
+  const width = 640;
+  const height = 180;
+  const pad = { top: 12, right: 14, bottom: 24, left: 34 };
+  const chartW = width - pad.left - pad.right;
+  const chartH = height - pad.top - pad.bottom;
+  const points = config.points ?? [];
+  svg.innerHTML = '';
+
+  if (!points.length) {
+    svg.innerHTML = `<text x="50%" y="50%" text-anchor="middle" class="empty-chart-label">${config.emptyLabel}</text>`;
+    return;
+  }
+
+  const xMin = Math.min(...points.map((p) => p.x));
+  const xMax = Math.max(...points.map((p) => p.x));
+  const yMax = Math.max(1, ...points.map((p) => p.y));
+
+  const toX = (x) => pad.left + ((x - xMin) / Math.max(1, xMax - xMin)) * chartW;
+  const toY = (y) => pad.top + chartH - (y / yMax) * chartH;
+
+  const gridValues = [0, 0.25, 0.5, 0.75, 1];
+  gridValues.forEach((ratio) => {
+    const y = pad.top + chartH * ratio;
+    const value = Math.round(yMax * (1 - ratio));
+    svg.insertAdjacentHTML('beforeend', `<line class="chart-gridline" x1="${pad.left}" y1="${y}" x2="${width - pad.right}" y2="${y}" />`);
+    svg.insertAdjacentHTML('beforeend', `<text class="chart-axis-label" x="${pad.left - 6}" y="${y + 3}" text-anchor="end">${value}</text>`);
+  });
+
+  const polyline = points.map((point) => `${toX(point.x)},${toY(point.y)}`).join(' ');
+  svg.insertAdjacentHTML('beforeend', `<polyline class="chart-line ${config.className}" points="${polyline}" />`);
+  svg.insertAdjacentHTML('beforeend', `<text class="chart-axis-label" x="${width / 2}" y="${height - 6}" text-anchor="middle">Day ${xMin} - ${xMax}</text>`);
+  svg.insertAdjacentHTML('beforeend', `<text class="chart-axis-label" x="${pad.left}" y="${pad.top - 2}">${config.yLabel}</text>`);
+
+  (config.markers ?? []).forEach((marker) => {
+    const cx = toX(marker.x);
+    const cy = toY(marker.y);
+    svg.insertAdjacentHTML('beforeend', `<circle class="stockout-marker" cx="${cx}" cy="${cy}" r="4" />`);
+  });
 }
 
 function getNode(id) { return state.nodes.find((n) => n.id === id); }
@@ -864,9 +1002,14 @@ function updateSelectionClasses() {
 
 function selectNodes(nodeIds, options = {}) {
   state.selectedNodeIds = [...new Set(nodeIds)];
+  if (state.selectedNodeIds.length === 1) {
+    state.analyticsNodeId = state.selectedNodeIds[0];
+    analyticsNodeSelect.value = state.analyticsNodeId;
+  }
   if (!options.keepLinks) state.selectedLinkIds = [];
   updateSelectionClasses();
   renderSelection();
+  renderAnalytics();
 }
 
 function toggleNodeSelection(nodeId) {
@@ -1101,6 +1244,10 @@ document.getElementById('playBtn').addEventListener('click', () => togglePlay(tr
 document.getElementById('pauseBtn').addEventListener('click', () => togglePlay(false));
 document.getElementById('resetBtn').addEventListener('click', resetSimulation);
 document.getElementById('tickSpeed').addEventListener('change', () => { if (state.timer) togglePlay(true); });
+analyticsNodeSelect.addEventListener('change', (e) => {
+  state.analyticsNodeId = e.target.value;
+  renderInventoryChart();
+});
 document.getElementById('clearLogBtn').addEventListener('click', () => {
   eventLog.innerHTML = '';
   state.eventLog = [];
