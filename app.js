@@ -10,6 +10,7 @@ const dayValue = document.getElementById('dayValue');
 const transitValue = document.getElementById('transitValue');
 const simStatusValue = document.getElementById('simStatusValue');
 const eventLog = document.getElementById('eventLog');
+const alertPanel = document.getElementById('alertPanel');
 const tempWire = document.getElementById('tempWire');
 const kpiBar = document.getElementById('kpiBar');
 const inventoryChart = document.getElementById('inventoryChart');
@@ -164,6 +165,8 @@ const state = {
   camera: { x: 0, y: 0, zoom: 1 },
   keyState: { space: false },
   graphErrors: [],
+  nodeStatusById: {},
+  alerts: { activeByKey: {} },
   globalPythonCode: '',
   ui: {
     showLinkLabels: false,
@@ -264,6 +267,7 @@ function addNode(type, x = 80 + state.nodes.length * 40, y = 60 + state.nodes.le
     received: 0,
     shipped: 0,
     stockouts: 0,
+    lastMissedShipmentDay: null,
     initial: structuredClone(data),
     validationErrors: {},
   };
@@ -275,6 +279,7 @@ function addNode(type, x = 80 + state.nodes.length * 40, y = 60 + state.nodes.le
   renderAnalyticsNodeOptions();
   selectNodes([node.id]);
   drawLinks();
+  updateOperationalAlerting({ logTransitions: false });
 }
 
 function addNodeFromContext(type) {
@@ -575,6 +580,7 @@ function refreshNode(nodeId) {
   renderAnalyticsNodeOptions();
   drawLinks();
   renderAnalytics();
+  updateOperationalAlerting({ logTransitions: false });
 }
 
 function deleteNodes(nodeIds) {
@@ -971,11 +977,13 @@ function refreshSimulationNodeViews() {
     const metricPointsEl = el.querySelector('[data-kpi="metric-points"]');
     if (metricPointsEl) metricPointsEl.textContent = state.analyticsMetricHistoryByNode[node.id]?.length ?? 0;
   });
+  updateOperationalAlerting({ logTransitions: false });
 }
 
 function runOneSimulationDay() {
   if (!canRunSimulation()) return false;
   simulateDay();
+  updateOperationalAlerting();
   updateStats();
   refreshSimulationNodeViews();
   renderSelection();
@@ -1031,6 +1039,7 @@ function suppliersShip() {
       .filter((l) => l.from === supplier.id)
       .slice()
       .sort((a, b) => a.priority - b.priority);
+    let shippedToday = 0;
     outgoingLinks.forEach((link) => {
       const target = getNode(link.to);
       if (!target) return;
@@ -1043,7 +1052,11 @@ function suppliersShip() {
       queueShipment(supplier, target, link, qty, supplier.leadTimeDays + link.transportDelayDays);
       if (Number.isFinite(supplier.inventory)) supplier.inventory -= qty;
       supplier.shipped += qty;
+      shippedToday += qty;
     });
+    if (outgoingLinks.length > 0 && shippedToday === 0) {
+      supplier.lastMissedShipmentDay = state.day;
+    }
   });
 }
 
@@ -1385,6 +1398,7 @@ function initializeSimulationTracking() {
   recordAnalyticsMetricHistory();
   renderAnalyticsNodeOptions();
   renderAnalytics();
+  updateOperationalAlerting({ logTransitions: false });
 }
 
 function resetSimulation() {
@@ -1397,12 +1411,14 @@ function resetSimulation() {
     node.received = 0;
     node.shipped = 0;
     node.stockouts = 0;
+    node.lastMissedShipmentDay = null;
     initializeNodeRuntime(node);
     refreshNode(node.id);
   });
   validateAll();
   initializeSimulationTracking();
   updateStats();
+  updateOperationalAlerting({ logTransitions: false });
   log('Simulation reset');
   renderSelection();
 }
@@ -1417,8 +1433,11 @@ function clearGraph() {
   state.analyticsNodeId = null;
   state.analyticsMetricHistoryByNode = {};
   state.graphErrors = [];
+  state.nodeStatusById = {};
+  state.alerts = { activeByKey: {} };
   workspace.querySelectorAll('.node-card').forEach((el) => el.remove());
   drawLinks();
+  renderAlertPanel([]);
   renderSelection();
   renderAnalyticsNodeOptions();
 }
@@ -1531,6 +1550,7 @@ function importScenarioObject(rawScenario, options = {}) {
       received: 0,
       shipped: 0,
       stockouts: 0,
+      lastMissedShipmentDay: null,
       initial: structuredClone(config),
       validationErrors: {},
     };
@@ -1588,6 +1608,7 @@ function importScenarioObject(rawScenario, options = {}) {
     renderViewport();
     renderAnalytics();
   }
+  updateOperationalAlerting({ logTransitions: false });
   if (!options.silent) log(options.logMessage ?? 'Scenario loaded');
 }
 
@@ -1903,6 +1924,11 @@ function applyNodeStyles(node) {
   el.style.transform = `scale(${state.camera.zoom})`;
   el.style.transformOrigin = 'top left';
   el.style.zIndex = `${node.z}`;
+  el.classList.remove('node-status-healthy', 'node-status-risk', 'node-status-critical');
+  const status = state.nodeStatusById[node.id] ?? { level: 'healthy', label: 'Healthy' };
+  el.classList.add(`node-status-${status.level}`);
+  const statusEl = el.querySelector('[data-role="node-status"]');
+  if (statusEl) statusEl.textContent = status.label;
 }
 
 function updateSelectionClasses() {
@@ -2194,8 +2220,12 @@ function drawTempLink(pointer) {
 }
 
 function log(message) {
-  state.eventLog.push({ day: state.day, message });
-  state.logBuffer.push({ day: state.day, message });
+  logWithLevel(message);
+}
+
+function logWithLevel(message, level = 'info') {
+  state.eventLog.push({ day: state.day, message, level });
+  state.logBuffer.push({ day: state.day, message, level });
   if (!state.logFlushHandle) {
     state.logFlushHandle = window.requestAnimationFrame(flushEventLogBuffer);
   }
@@ -2208,7 +2238,7 @@ function flushEventLogBuffer() {
   const fragment = document.createDocumentFragment();
   entries.forEach((item) => {
     const entry = document.createElement('div');
-    entry.className = 'log-entry';
+    entry.className = `log-entry${item.level && item.level !== 'info' ? ` level-${item.level}` : ''}`;
     entry.textContent = `Day ${item.day}: ${item.message}`;
     fragment.prepend(entry);
   });
@@ -2216,6 +2246,71 @@ function flushEventLogBuffer() {
   while (eventLog.childElementCount > 600) {
     eventLog.lastElementChild?.remove();
   }
+}
+
+function evaluateNodeOperationalStatus(node) {
+  if (node.type === 'plant' && node.stockouts > 0) {
+    return { level: 'critical', label: 'Stockout', message: `${node.name} is in stockout.` };
+  }
+  if (node.type === 'warehouse') {
+    const reorderPoint = node.reorderPoint ?? null;
+    const nearEmptyThreshold = Math.max(1, Math.floor((node.storageCapacity ?? 0) * 0.15));
+    const belowReorder = reorderPoint != null && node.inventory <= reorderPoint;
+    const nearEmpty = Number.isFinite(node.inventory) && node.inventory <= nearEmptyThreshold;
+    const blocked = (node.preparationQueue?.length ?? 0) > 0 && node.inventory <= 0;
+    if (blocked) return { level: 'critical', label: 'Blocked', message: `${node.name} is blocked with queued requests and no inventory.` };
+    if (belowReorder || nearEmpty) return { level: 'risk', label: 'At risk', message: `${node.name} inventory is below operating targets.` };
+  }
+  if (node.type === 'supplier' && node.lastMissedShipmentDay === state.day) {
+    return { level: 'risk', label: 'Delayed', message: `${node.name} missed a scheduled shipment.` };
+  }
+  return { level: 'healthy', label: 'Healthy', message: '' };
+}
+
+function updateOperationalAlerting(options = {}) {
+  const logTransitions = options.logTransitions !== false;
+  const previousAlerts = state.alerts.activeByKey ?? {};
+  const nextAlerts = {};
+  const activeAlerts = [];
+
+  state.nodes.forEach((node) => {
+    const status = evaluateNodeOperationalStatus(node);
+    state.nodeStatusById[node.id] = status;
+    if (status.level === 'healthy') return;
+    const key = `${node.id}:${status.label}`;
+    const alert = { key, nodeId: node.id, nodeName: node.name, severity: status.level, label: status.label, message: status.message };
+    nextAlerts[key] = alert;
+    activeAlerts.push(alert);
+  });
+
+  if (logTransitions) {
+    Object.values(nextAlerts).forEach((alert) => {
+      if (!previousAlerts[alert.key]) {
+        logWithLevel(`[ALERT] ${alert.message}`, 'alert');
+      }
+    });
+    Object.values(previousAlerts).forEach((alert) => {
+      if (!nextAlerts[alert.key]) {
+        log(`[RESOLVED] ${alert.nodeName} alert cleared.`);
+      }
+    });
+  }
+
+  state.alerts.activeByKey = nextAlerts;
+  renderAlertPanel(activeAlerts);
+  state.nodes.forEach((node) => applyNodeStyles(node));
+}
+
+function renderAlertPanel(alerts = []) {
+  if (!alertPanel) return;
+  if (!alerts.length) {
+    alertPanel.innerHTML = '<div class="alert-entry empty">No active operational alerts.</div>';
+    return;
+  }
+  alertPanel.innerHTML = alerts
+    .sort((a, b) => (a.severity === b.severity ? a.nodeName.localeCompare(b.nodeName) : (a.severity === 'critical' ? -1 : 1)))
+    .map((alert) => `<div class="alert-entry ${alert.severity}"><strong>${alert.label}</strong> — ${alert.message}</div>`)
+    .join('');
 }
 
 function scheduleNextSimulationTick() {

@@ -151,6 +151,15 @@ def clamp(value, min_value, max_value):
 
       <footer class="event-log-wrap">
         <div class="log-header">
+          <h3>Notifications</h3>
+        </div>
+        <div id="alertPanel" class="alert-panel">
+          <div class="alert-entry empty">No active operational alerts.</div>
+        </div>
+      </footer>
+
+      <footer class="event-log-wrap">
+        <div class="log-header">
           <h3>Event Log</h3>
           <button id="clearLogBtn" class="ghost small">Clear log</button>
         </div>
@@ -166,6 +175,7 @@ def clamp(value, min_value, max_value):
           <span class="node-type-chip"></span>
           <input class="node-title" />
         </div>
+        <span class="node-status-pill" data-role="node-status">Healthy</span>
         <button class="delete-node" title="Delete node">×</button>
       </div>
       <div class="node-body"></div>
