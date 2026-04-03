@@ -17,6 +17,39 @@ workspace.appendChild(selectionBox);
 const MIN_ZOOM = 0.35;
 const MAX_ZOOM = 2.5;
 
+const NODE_SCHEMAS = {
+  supplier: {
+    label: 'Supplier',
+    fields: [
+      { key: 'name', label: 'Name', type: 'string', required: true, defaultValue: (i) => `Supplier ${i}` },
+      { key: 'deliveryFrequencyDays', label: 'Delivery frequency (days)', type: 'int', required: true, min: 1, step: 1, defaultValue: 3 },
+      { key: 'deliveryQuantity', label: 'Delivery quantity', type: 'int', required: true, min: 1, step: 1, defaultValue: 120 },
+      { key: 'leadTimeDays', label: 'Lead time (days)', type: 'int', required: true, min: 0, step: 1, defaultValue: 1 },
+      { key: 'initialInventory', label: 'Initial inventory (optional)', type: 'int', required: false, min: 0, step: 1, defaultValue: null },
+    ],
+  },
+  warehouse: {
+    label: 'Warehouse',
+    fields: [
+      { key: 'name', label: 'Name', type: 'string', required: true, defaultValue: (i) => `Warehouse ${i}` },
+      { key: 'preparationTimeDays', label: 'Preparation time (days)', type: 'int', required: true, min: 0, step: 1, defaultValue: 1 },
+      { key: 'deliveryToPlantDays', label: 'Delivery to plant (days)', type: 'int', required: true, min: 0, step: 1, defaultValue: 2 },
+      { key: 'storageCapacity', label: 'Storage capacity', type: 'int', required: true, min: 1, step: 1, defaultValue: 600 },
+      { key: 'initialInventory', label: 'Initial inventory', type: 'int', required: true, min: 0, step: 1, defaultValue: 120 },
+      { key: 'reorderPoint', label: 'Reorder point (optional)', type: 'int', required: false, min: 0, step: 1, defaultValue: null },
+    ],
+  },
+  plant: {
+    label: 'Plant',
+    fields: [
+      { key: 'name', label: 'Name', type: 'string', required: true, defaultValue: (i) => `Plant ${i}` },
+      { key: 'consumptionRatePerDay', label: 'Consumption rate / day', type: 'int', required: true, min: 0, step: 1, defaultValue: 20 },
+      { key: 'initialInventory', label: 'Initial inventory', type: 'int', required: true, min: 0, step: 1, defaultValue: 100 },
+      { key: 'safetyStock', label: 'Safety stock (optional)', type: 'int', required: false, min: 0, step: 1, defaultValue: null },
+    ],
+  },
+};
+
 const state = {
   nodes: [],
   links: [],
@@ -34,43 +67,46 @@ const state = {
   zCounter: 1,
   camera: { x: 0, y: 0, zoom: 1 },
   keyState: { space: false },
+  graphErrors: [],
 };
 
-const presets = {
-  supplier: () => ({
-    name: `Supplier ${state.nodeCounter}`,
-    deliveryFrequency: 3,
-    batchSize: 120,
-    inventory: Infinity,
-    received: 0,
-    shipped: 0,
-  }),
-  warehouse: () => ({
-    name: `Warehouse ${state.nodeCounter}`,
-    prepTime: 1,
-    deliveryTime: 2,
-    dispatchBatch: 80,
-    inventory: 0,
-    received: 0,
-    shipped: 0,
-  }),
-  plant: () => ({
-    name: `Plant ${state.nodeCounter}`,
-    consumptionRate: 20,
-    inventory: 100,
-    received: 0,
-    stockouts: 0,
-  }),
-};
+function createNodeData(type) {
+  const schema = NODE_SCHEMAS[type];
+  const data = {};
+  schema.fields.forEach((field) => {
+    const raw = typeof field.defaultValue === 'function' ? field.defaultValue(state.nodeCounter) : field.defaultValue;
+    data[field.key] = raw;
+  });
+  return data;
+}
 
 function addNode(type, x = 80 + state.nodes.length * 40, y = 60 + state.nodes.length * 30) {
-  const data = presets[type]();
+  const data = createNodeData(type);
   const id = `node-${state.nodeCounter++}`;
-  const node = { id, type, x, y, z: state.zCounter++, ...data, initial: structuredClone(data) };
+  const node = {
+    id,
+    type,
+    x,
+    y,
+    z: state.zCounter++,
+    ...data,
+    inventory: resolveInitialInventory(type, data),
+    received: 0,
+    shipped: 0,
+    stockouts: 0,
+    initial: structuredClone(data),
+    validationErrors: {},
+  };
   state.nodes.push(node);
+  validateAll();
   renderNode(node);
   selectNodes([node.id]);
   drawLinks();
+}
+
+function resolveInitialInventory(type, data) {
+  if (type === 'supplier') return data.initialInventory == null ? Infinity : data.initialInventory;
+  return data.initialInventory;
 }
 
 function renderNode(node) {
@@ -83,6 +119,9 @@ function renderNode(node) {
   titleInput.value = node.name;
   titleInput.addEventListener('input', (e) => {
     node.name = e.target.value;
+    node.initial.name = node.name;
+    validateAll();
+    refreshNode(node.id);
     renderSelection();
     drawLinks();
   });
@@ -116,12 +155,31 @@ function renderNode(node) {
   applyNodeStyles(node);
 }
 
+function getFieldError(node, fieldKey) {
+  return node.validationErrors[fieldKey] || '';
+}
+
 function getNodeBody(node) {
+  const schema = NODE_SCHEMAS[node.type];
+  const fieldsHtml = schema.fields
+    .filter((f) => f.key !== 'name')
+    .map((field) => {
+      const value = node[field.key] == null ? '' : node[field.key];
+      const error = getFieldError(node, field.key);
+      return `
+        <div class="field ${error ? 'invalid' : ''}">
+          <label>${field.label}</label>
+          <input type="number" min="${field.min ?? 0}" step="${field.step ?? 1}" data-field="${field.key}" value="${value}" />
+          ${error ? `<div class="field-error">${error}</div>` : ''}
+        </div>`;
+    })
+    .join('');
+
   const commonKpis = {
     supplier: `
       <div class="kpis">
         <div class="kpi"><span class="label">Shipped</span><span class="value">${node.shipped}</span></div>
-        <div class="kpi"><span class="label">Frequency</span><span class="value">${node.deliveryFrequency} d</span></div>
+        <div class="kpi"><span class="label">Frequency</span><span class="value">${node.deliveryFrequencyDays} d</span></div>
       </div>`,
     warehouse: `
       <div class="kpis">
@@ -135,39 +193,88 @@ function getNodeBody(node) {
       </div>`,
   };
 
-  if (node.type === 'supplier') {
-    return `
-      <div class="field"><label>Delivery frequency (days)</label><input type="number" min="1" step="1" data-field="deliveryFrequency" value="${node.deliveryFrequency}" /></div>
-      <div class="field"><label>Shipment batch size</label><input type="number" min="1" step="1" data-field="batchSize" value="${node.batchSize}" /></div>
-      ${commonKpis.supplier}`;
-  }
-  if (node.type === 'warehouse') {
-    return `
-      <div class="field"><label>Preparation time (days)</label><input type="number" min="0" step="1" data-field="prepTime" value="${node.prepTime}" /></div>
-      <div class="field"><label>Delivery time to plant (days)</label><input type="number" min="0" step="1" data-field="deliveryTime" value="${node.deliveryTime}" /></div>
-      <div class="field"><label>Dispatch batch size</label><input type="number" min="1" step="1" data-field="dispatchBatch" value="${node.dispatchBatch}" /></div>
-      ${commonKpis.warehouse}`;
-  }
-  return `
-    <div class="field"><label>Consumption rate / day</label><input type="number" min="0" step="1" data-field="consumptionRate" value="${node.consumptionRate}" /></div>
-    <div class="field"><label>Initial inventory</label><input type="number" min="0" step="1" data-field="inventory" value="${node.inventory}" /></div>
-    ${commonKpis.plant}`;
+  return `${fieldsHtml}${commonKpis[node.type]}`;
 }
 
 function bindFieldEvents(body, node) {
   body.querySelectorAll('[data-field]').forEach((input) => {
     input.addEventListener('input', (e) => {
       const field = e.target.dataset.field;
-      node[field] = Number(e.target.value);
-      if (field === 'inventory') {
-        node.initial.inventory = node.inventory;
-      } else {
-        node.initial[field] = node[field];
+      const raw = e.target.value.trim();
+      const value = raw === '' ? null : Number(raw);
+      node[field] = value;
+      node.initial[field] = value;
+      if (field === 'initialInventory') {
+        node.inventory = resolveInitialInventory(node.type, node);
       }
+      validateAll();
       refreshNode(node.id);
       renderSelection();
     });
   });
+}
+
+function validateNode(node) {
+  const schema = NODE_SCHEMAS[node.type];
+  const errors = {};
+  schema.fields.forEach((field) => {
+    const value = node[field.key];
+    if (field.type === 'string') {
+      if (field.required && (!value || !String(value).trim())) {
+        errors[field.key] = `${field.label} is required.`;
+      }
+      return;
+    }
+
+    if (value == null || Number.isNaN(value)) {
+      if (field.required) errors[field.key] = `${field.label} is required.`;
+      return;
+    }
+
+    if (!Number.isFinite(value)) {
+      errors[field.key] = `${field.label} must be finite.`;
+      return;
+    }
+
+    if (!Number.isInteger(value)) {
+      errors[field.key] = `${field.label} must be an integer.`;
+      return;
+    }
+
+    if (field.min != null && value < field.min) {
+      errors[field.key] = `${field.label} must be ≥ ${field.min}.`;
+    }
+  });
+
+  if (node.type === 'warehouse') {
+    if (Number.isFinite(node.initialInventory) && Number.isFinite(node.storageCapacity) && node.initialInventory > node.storageCapacity) {
+      errors.initialInventory = 'Initial inventory must be ≤ storage capacity.';
+    }
+    if (node.reorderPoint != null && Number.isFinite(node.storageCapacity) && node.reorderPoint > node.storageCapacity) {
+      errors.reorderPoint = 'Reorder point must be ≤ storage capacity.';
+    }
+  }
+
+  return errors;
+}
+
+function validateAll() {
+  state.nodes.forEach((node) => {
+    node.validationErrors = validateNode(node);
+  });
+
+  state.graphErrors = [];
+  state.links.forEach((link) => {
+    const from = getNode(link.from);
+    const to = getNode(link.to);
+    if (!from || !to || !isValidLink(from, to)) {
+      state.graphErrors.push(`Invalid link ${link.id}. Allowed: Supplier→Warehouse/Plant, Warehouse→Plant.`);
+    }
+  });
+}
+
+function hasValidationErrors() {
+  return state.nodes.some((n) => Object.keys(n.validationErrors).length) || state.graphErrors.length > 0;
 }
 
 function refreshNode(nodeId) {
@@ -190,10 +297,9 @@ function deleteNodes(nodeIds) {
   state.shipments = state.shipments.filter((s) => !idSet.has(s.from) && !idSet.has(s.to));
   nodeIds.forEach((nodeId) => getNodeElement(nodeId)?.remove());
   state.selectedNodeIds = state.selectedNodeIds.filter((id) => !idSet.has(id));
-  if (!state.selectedNodeIds.length && state.nodes.length) {
-    state.selectedNodeIds = [state.nodes[0].id];
-  }
+  if (!state.selectedNodeIds.length && state.nodes.length) state.selectedNodeIds = [state.nodes[0].id];
   state.selectedLinkIds = [];
+  validateAll();
   drawLinks();
   renderSelection();
   updateStats();
@@ -203,19 +309,13 @@ function startNodeDrag(e, nodeId) {
   if (e.button !== 0 || state.keyState.space) return;
   if (e.target.closest('input, button')) return;
   e.preventDefault();
-
-  if (!state.selectedNodeIds.includes(nodeId)) {
-    selectNodes([nodeId]);
-  }
+  if (!state.selectedNodeIds.includes(nodeId)) selectNodes([nodeId]);
   state.selectedNodeIds.forEach(bringNodeToFront);
 
   const pointerWorld = screenToWorld(e.clientX, e.clientY);
   state.drag = {
     pointerId: e.pointerId,
-    starts: state.selectedNodeIds
-      .map((id) => getNode(id))
-      .filter(Boolean)
-      .map((node) => ({ id: node.id, x: node.x, y: node.y })),
+    starts: state.selectedNodeIds.map((id) => getNode(id)).filter(Boolean).map((node) => ({ id: node.id, x: node.x, y: node.y })),
     pointerStart: pointerWorld,
   };
 
@@ -228,7 +328,6 @@ function onNodeDrag(e) {
   const pointer = screenToWorld(e.clientX, e.clientY);
   const dx = pointer.x - state.drag.pointerStart.x;
   const dy = pointer.y - state.drag.pointerStart.y;
-
   state.drag.starts.forEach((start) => {
     const node = getNode(start.id);
     if (!node) return;
@@ -236,7 +335,6 @@ function onNodeDrag(e) {
     node.y = Math.max(16, start.y + dy);
     applyNodeStyles(node);
   });
-
   drawLinks();
 }
 
@@ -247,13 +345,7 @@ function stopNodeDrag() {
 
 function startPan(e) {
   e.preventDefault();
-  state.pan = {
-    pointerId: e.pointerId,
-    startX: e.clientX,
-    startY: e.clientY,
-    originX: state.camera.x,
-    originY: state.camera.y,
-  };
+  state.pan = { pointerId: e.pointerId, startX: e.clientX, startY: e.clientY, originX: state.camera.x, originY: state.camera.y };
   workspace.classList.add('is-panning');
   window.addEventListener('pointermove', onPanMove);
   window.addEventListener('pointerup', stopPan, { once: true });
@@ -288,12 +380,10 @@ function onBoxSelectionMove(e) {
   updateSelectionBox();
 
   const bounds = normalizedBounds(state.boxSelection.start, state.boxSelection.current);
-  const hits = state.nodes
-    .filter((node) => {
-      const rect = nodeRect(node);
-      return rect.x2 >= bounds.x1 && rect.x1 <= bounds.x2 && rect.y2 >= bounds.y1 && rect.y1 <= bounds.y2;
-    })
-    .map((node) => node.id);
+  const hits = state.nodes.filter((node) => {
+    const rect = nodeRect(node);
+    return rect.x2 >= bounds.x1 && rect.x1 <= bounds.x2 && rect.y2 >= bounds.y1 && rect.y1 <= bounds.y2;
+  }).map((node) => node.id);
   selectNodes(hits, { keepLinks: false });
 }
 
@@ -317,16 +407,9 @@ function startLinkDrag(e, nodeId) {
   if (e.button !== 0) return;
   e.stopPropagation();
   const fromPort = e.currentTarget;
-  state.linking = {
-    pointerId: e.pointerId,
-    from: nodeId,
-    origin: portCenter(fromPort),
-    pointer: portCenter(fromPort),
-    targetNodeId: null,
-  };
+  state.linking = { pointerId: e.pointerId, from: nodeId, origin: portCenter(fromPort), pointer: portCenter(fromPort), targetNodeId: null };
   tempWire.classList.remove('hidden');
   drawTempLink(state.linking.pointer);
-
   window.addEventListener('pointermove', onLinkDragMove);
   window.addEventListener('pointerup', stopLinkDrag, { once: true });
   log(`Started link from ${getNode(nodeId).name}`);
@@ -379,6 +462,7 @@ function tryCreateLink(fromId, toId) {
   state.links.push(link);
   state.selectedLinkIds = [link.id];
   state.selectedNodeIds = [];
+  validateAll();
   log(`Linked ${from.name} → ${to.name}`);
   drawLinks();
   renderSelection();
@@ -450,6 +534,9 @@ function renderSelection() {
   if (!node) return;
   const outgoing = state.links.filter((l) => l.from === node.id).map((l) => getNode(l.to)?.name).join(', ') || 'None';
   const incoming = state.links.filter((l) => l.to === node.id).map((l) => getNode(l.from)?.name).join(', ') || 'None';
+  const nodeErrors = Object.values(node.validationErrors);
+  const graphErrorsHtml = state.graphErrors.length ? `<div class="validation-block"><strong>Graph errors</strong><ul>${state.graphErrors.map((e) => `<li>${e}</li>`).join('')}</ul></div>` : '';
+
   selectionPanel.innerHTML = `
     <div class="selection-grid">
       <div class="selection-row"><span>Name</span><strong>${node.name}</strong></div>
@@ -457,13 +544,25 @@ function renderSelection() {
       <div class="selection-row"><span>Incoming</span><strong>${incoming}</strong></div>
       <div class="selection-row"><span>Outgoing</span><strong>${outgoing}</strong></div>
       <div class="selection-row"><span>Inventory</span><strong>${Number.isFinite(node.inventory) ? node.inventory : '∞'}</strong></div>
-      ${node.type === 'supplier' ? `<div class="selection-row"><span>Frequency</span><strong>${node.deliveryFrequency} days</strong></div>` : ''}
-      ${node.type === 'warehouse' ? `<div class="selection-row"><span>Prep + Delivery</span><strong>${node.prepTime + node.deliveryTime} days</strong></div>` : ''}
-      ${node.type === 'plant' ? `<div class="selection-row"><span>Consumption</span><strong>${node.consumptionRate}/day</strong></div>` : ''}
-    </div>`;
+      ${node.type === 'supplier' ? `<div class="selection-row"><span>Frequency</span><strong>${node.deliveryFrequencyDays} days</strong></div>` : ''}
+      ${node.type === 'warehouse' ? `<div class="selection-row"><span>Prep + Delivery</span><strong>${node.preparationTimeDays + node.deliveryToPlantDays} days</strong></div>` : ''}
+      ${node.type === 'plant' ? `<div class="selection-row"><span>Consumption</span><strong>${node.consumptionRatePerDay}/day</strong></div>` : ''}
+    </div>
+    ${nodeErrors.length ? `<div class="validation-block"><strong>Validation errors</strong><ul>${nodeErrors.map((e) => `<li>${e}</li>`).join('')}</ul></div>` : '<div class="validation-ok">No validation errors.</div>'}
+    ${graphErrorsHtml}`;
+}
+
+function canRunSimulation() {
+  validateAll();
+  if (!hasValidationErrors()) return true;
+  log('Simulation blocked: resolve validation errors first.');
+  renderSelection();
+  state.nodes.forEach((n) => refreshNode(n.id));
+  return false;
 }
 
 function stepSimulation() {
+  if (!canRunSimulation()) return;
   state.day += 1;
   processArrivals();
   suppliersShip();
@@ -480,19 +579,33 @@ function processArrivals() {
   arriving.forEach((shipment) => {
     const toNode = getNode(shipment.to);
     if (!toNode) return;
-    if (Number.isFinite(toNode.inventory)) toNode.inventory += shipment.qty;
-    toNode.received += shipment.qty;
-    log(`${shipment.qty} units arrived at ${toNode.name} from ${shipment.fromName}`);
+
+    let receivedQty = shipment.qty;
+    if (toNode.type === 'warehouse') {
+      const capacityLeft = Math.max(0, toNode.storageCapacity - toNode.inventory);
+      receivedQty = Math.min(receivedQty, capacityLeft);
+      if (receivedQty < shipment.qty) {
+        log(`${toNode.name} overflowed by ${shipment.qty - receivedQty} units (discarded).`);
+      }
+    }
+
+    if (Number.isFinite(toNode.inventory)) toNode.inventory += receivedQty;
+    toNode.received += receivedQty;
+    log(`${receivedQty} units arrived at ${toNode.name} from ${shipment.fromName}`);
   });
 }
 
 function suppliersShip() {
   state.nodes.filter((n) => n.type === 'supplier').forEach((supplier) => {
-    if (state.day % supplier.deliveryFrequency !== 0) return;
+    if (state.day % supplier.deliveryFrequencyDays !== 0) return;
     const targets = state.links.filter((l) => l.from === supplier.id).map((l) => getNode(l.to)).filter(Boolean);
     targets.forEach((target) => {
-      queueShipment(supplier, target, supplier.batchSize, 1);
-      supplier.shipped += supplier.batchSize;
+      if (Number.isFinite(supplier.inventory) && supplier.inventory <= 0) return;
+      const qty = Number.isFinite(supplier.inventory) ? Math.min(supplier.deliveryQuantity, supplier.inventory) : supplier.deliveryQuantity;
+      if (qty <= 0) return;
+      queueShipment(supplier, target, qty, supplier.leadTimeDays);
+      if (Number.isFinite(supplier.inventory)) supplier.inventory -= qty;
+      supplier.shipped += qty;
     });
   });
 }
@@ -501,9 +614,13 @@ function warehousesDispatch() {
   state.nodes.filter((n) => n.type === 'warehouse').forEach((warehouse) => {
     const plants = state.links.filter((l) => l.from === warehouse.id).map((l) => getNode(l.to)).filter((n) => n?.type === 'plant');
     plants.forEach((plant) => {
-      if (warehouse.inventory <= 0) return;
-      const qty = Math.min(warehouse.dispatchBatch, warehouse.inventory);
-      const totalLead = warehouse.prepTime + warehouse.deliveryTime;
+      const safety = plant.safetyStock ?? 0;
+      const desired = safety + plant.consumptionRatePerDay;
+      const need = Math.max(0, desired - plant.inventory);
+      if (need <= 0 || warehouse.inventory <= 0) return;
+      if (warehouse.reorderPoint != null && warehouse.inventory <= warehouse.reorderPoint) return;
+      const qty = Math.min(need, warehouse.inventory);
+      const totalLead = warehouse.preparationTimeDays + warehouse.deliveryToPlantDays;
       warehouse.inventory -= qty;
       warehouse.shipped += qty;
       queueShipment(warehouse, plant, qty, totalLead);
@@ -513,9 +630,9 @@ function warehousesDispatch() {
 
 function plantsConsume() {
   state.nodes.filter((n) => n.type === 'plant').forEach((plant) => {
-    if (plant.inventory >= plant.consumptionRate) {
-      plant.inventory -= plant.consumptionRate;
-      log(`${plant.name} consumed ${plant.consumptionRate} units`);
+    if (plant.inventory >= plant.consumptionRatePerDay) {
+      plant.inventory -= plant.consumptionRatePerDay;
+      log(`${plant.name} consumed ${plant.consumptionRatePerDay} units`);
     } else {
       const consumed = plant.inventory;
       plant.inventory = 0;
@@ -526,13 +643,7 @@ function plantsConsume() {
 }
 
 function queueShipment(from, to, qty, leadTime) {
-  state.shipments.push({
-    from: from.id,
-    to: to.id,
-    qty,
-    arrivalDay: state.day + leadTime,
-    fromName: from.name,
-  });
+  state.shipments.push({ from: from.id, to: to.id, qty, arrivalDay: state.day + leadTime, fromName: from.name });
   log(`${from.name} shipped ${qty} units to ${to.name} (ETA day ${state.day + leadTime})`);
 }
 
@@ -541,14 +652,32 @@ function resetSimulation() {
   state.shipments = [];
   state.nodes.forEach((node) => {
     Object.assign(node, structuredClone(node.initial));
+    node.inventory = resolveInitialInventory(node.type, node);
     node.received = 0;
     node.shipped = 0;
     node.stockouts = 0;
     refreshNode(node.id);
   });
+  validateAll();
   updateStats();
   log('Simulation reset');
   renderSelection();
+}
+
+function serializeGraph() {
+  return {
+    version: 1,
+    day: state.day,
+    nodes: state.nodes.map((node) => {
+      const schemaKeys = NODE_SCHEMAS[node.type].fields.map((f) => f.key);
+      const config = schemaKeys.reduce((acc, key) => {
+        acc[key] = node[key] ?? null;
+        return acc;
+      }, {});
+      return { id: node.id, type: node.type, position: { x: node.x, y: node.y }, config };
+    }),
+    links: state.links.map((l) => ({ id: l.id, from: l.from, to: l.to })),
+  };
 }
 
 function updateStats() {
@@ -556,13 +685,8 @@ function updateStats() {
   transitValue.textContent = state.shipments.length;
 }
 
-function getNode(id) {
-  return state.nodes.find((n) => n.id === id);
-}
-
-function getNodeElement(nodeId) {
-  return workspace.querySelector(`.node-card[data-id="${nodeId}"]`);
-}
+function getNode(id) { return state.nodes.find((n) => n.id === id); }
+function getNodeElement(nodeId) { return workspace.querySelector(`.node-card[data-id="${nodeId}"]`); }
 
 function bringNodeToFront(nodeId) {
   const node = getNode(nodeId);
@@ -609,6 +733,7 @@ function deleteSelected() {
     const deleteSet = new Set(state.selectedLinkIds);
     state.links = state.links.filter((link) => !deleteSet.has(link.id));
     state.selectedLinkIds = [];
+    validateAll();
     drawLinks();
     renderSelection();
     return;
@@ -621,7 +746,6 @@ function duplicateSelected() {
   const originalNodes = state.selectedNodeIds.map(getNode).filter(Boolean);
   if (!originalNodes.length) return;
 
-  // Duplicate nodes with a small offset and reconnect links only within the duplicated set.
   const cloneMap = new Map();
   const duplicates = originalNodes.map((node, idx) => {
     const id = `node-${state.nodeCounter++}`;
@@ -638,16 +762,11 @@ function duplicateSelected() {
     return copy.id;
   });
 
-  state.links
-    .filter((link) => cloneMap.has(link.from) && cloneMap.has(link.to))
-    .forEach((link) => {
-      state.links.push({
-        id: `link-${state.linkCounter++}`,
-        from: cloneMap.get(link.from),
-        to: cloneMap.get(link.to),
-      });
-    });
+  state.links.filter((link) => cloneMap.has(link.from) && cloneMap.has(link.to)).forEach((link) => {
+    state.links.push({ id: `link-${state.linkCounter++}`, from: cloneMap.get(link.from), to: cloneMap.get(link.to) });
+  });
 
+  validateAll();
   selectNodes(duplicates);
   drawLinks();
   log(`Duplicated ${duplicates.length} node${duplicates.length > 1 ? 's' : ''}`);
@@ -657,12 +776,7 @@ function fitToGraph() {
   if (!state.nodes.length) return;
   const bounds = state.nodes.reduce((acc, node) => {
     const rect = nodeRect(node);
-    return {
-      x1: Math.min(acc.x1, rect.x1),
-      y1: Math.min(acc.y1, rect.y1),
-      x2: Math.max(acc.x2, rect.x2),
-      y2: Math.max(acc.y2, rect.y2),
-    };
+    return { x1: Math.min(acc.x1, rect.x1), y1: Math.min(acc.y1, rect.y1), x2: Math.max(acc.x2, rect.x2), y2: Math.max(acc.y2, rect.y2) };
   }, { x1: Infinity, y1: Infinity, x2: -Infinity, y2: -Infinity });
 
   const padding = 80;
@@ -680,7 +794,6 @@ function fitToGraph() {
 }
 
 function renderViewport() {
-  // Nodes are rendered in world space, then transformed to screen space via camera.
   state.nodes.forEach((node) => applyNodeStyles(node));
   drawLinks();
   if (state.boxSelection) updateSelectionBox();
@@ -693,24 +806,16 @@ function screenToWorkspace(clientX, clientY) {
 
 function screenToWorld(clientX, clientY) {
   const screen = screenToWorkspace(clientX, clientY);
-  return {
-    x: (screen.x - state.camera.x) / state.camera.zoom,
-    y: (screen.y - state.camera.y) / state.camera.zoom,
-  };
+  return { x: (screen.x - state.camera.x) / state.camera.zoom, y: (screen.y - state.camera.y) / state.camera.zoom };
 }
 
 function worldToScreen(x, y) {
-  return {
-    x: state.camera.x + x * state.camera.zoom,
-    y: state.camera.y + y * state.camera.zoom,
-  };
+  return { x: state.camera.x + x * state.camera.zoom, y: state.camera.y + y * state.camera.zoom };
 }
 
 function zoomAt(clientX, clientY, nextZoom) {
   const clampedZoom = clamp(nextZoom, MIN_ZOOM, MAX_ZOOM);
   if (clampedZoom === state.camera.zoom) return;
-
-  // Keep the world point under the cursor stable while zooming.
   const before = screenToWorld(clientX, clientY);
   state.camera.zoom = clampedZoom;
   const rect = workspace.getBoundingClientRect();
@@ -721,22 +826,15 @@ function zoomAt(clientX, clientY, nextZoom) {
 
 function nodeRect(node) {
   const width = 264;
-  const height = 170;
+  const height = 190;
   return { x1: node.x, y1: node.y, x2: node.x + width, y2: node.y + height };
 }
 
 function normalizedBounds(a, b) {
-  return {
-    x1: Math.min(a.x, b.x),
-    y1: Math.min(a.y, b.y),
-    x2: Math.max(a.x, b.x),
-    y2: Math.max(a.y, b.y),
-  };
+  return { x1: Math.min(a.x, b.x), y1: Math.min(a.y, b.y), x2: Math.max(a.x, b.x), y2: Math.max(a.y, b.y) };
 }
 
-function clamp(value, min, max) {
-  return Math.max(min, Math.min(max, value));
-}
+function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 
 function clearLinkingState() {
   state.linking = null;
@@ -748,9 +846,7 @@ function clearLinkingState() {
 function drawTempLink(pointer) {
   if (!state.linking?.origin) return;
   const start = state.linking.origin;
-  const end = state.linking.targetNodeId
-    ? portCenter(workspace.querySelector(`.node-card[data-id="${state.linking.targetNodeId}"] .in-port`))
-    : pointer;
+  const end = state.linking.targetNodeId ? portCenter(workspace.querySelector(`.node-card[data-id="${state.linking.targetNodeId}"] .in-port`)) : pointer;
   const dx = Math.max(55 * state.camera.zoom, Math.abs(end.x - start.x) * 0.45);
   tempLinkPath.setAttribute('d', `M ${start.x} ${start.y} C ${start.x + dx} ${start.y}, ${end.x - dx} ${end.y}, ${end.x} ${end.y}`);
   tempLinkPath.classList.remove('hidden');
@@ -767,6 +863,7 @@ function togglePlay(play) {
   clearInterval(state.timer);
   state.timer = null;
   if (play) {
+    if (!canRunSimulation()) return;
     const speed = Number(document.getElementById('tickSpeed').value);
     state.timer = setInterval(stepSimulation, speed);
   }
@@ -828,7 +925,6 @@ window.addEventListener('keydown', (e) => {
 
   if (e.key === 'Escape') {
     clearLinkingState();
-    return;
   }
 });
 
@@ -845,6 +941,7 @@ document.getElementById('addPlant').addEventListener('click', () => addNode('pla
 document.getElementById('clearLinks').addEventListener('click', () => {
   state.links = [];
   state.selectedLinkIds = [];
+  validateAll();
   drawLinks();
   log('All links cleared');
   renderSelection();
@@ -861,7 +958,13 @@ addNode('warehouse', 430, 120);
 addNode('plant', 800, 150);
 state.links.push({ id: `link-${state.linkCounter++}`, from: state.nodes[0].id, to: state.nodes[1].id });
 state.links.push({ id: `link-${state.linkCounter++}`, from: state.nodes[1].id, to: state.nodes[2].id });
+validateAll();
 fitToGraph();
 updateStats();
 selectNodes([state.nodes[0].id]);
 log('Starter scenario loaded');
+
+window.SupplyChainFlowLab = {
+  serializeGraph,
+  getState: () => structuredClone({ nodes: state.nodes, links: state.links, graphErrors: state.graphErrors }),
+};
