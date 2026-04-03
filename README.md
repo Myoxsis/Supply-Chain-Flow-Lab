@@ -25,7 +25,8 @@ What this draft does
 - Fit graph to viewport with F or double-click on the canvas.
 - Simulate daily flows:
   - Supplier ships on its delivery frequency.
-  - Warehouse dispatches with preparation + delivery lead time.
+  - Warehouse stages outbound demand in a preparation queue.
+  - Warehouse dispatches only after preparation time and optional per-day preparation capacity.
   - Plant consumes at its consumption rate.
 - Event log and selection inspector.
 - Global Python script box + per-Analytics-node Python snippets (stored in graph state for backend execution workflows).
@@ -36,11 +37,12 @@ What this draft does
   - Versioned scenario schema with migration hooks.
 
 Scenario JSON versioning strategy
-- Current version: `3`.
+- Current version: `4`.
 - `migrateScenario()` upgrades old payloads to the latest format before import.
 - Version migration rules currently include:
   - v1 → v2: adds `globalPythonCode`, `ui`, and fills missing link fields with defaults.
   - v2 → v3: normalizes UI flags (`showLinkLabels`, `allowWarehouseToWarehouse`, `allowPlantOutbound`).
+  - v3 → v4: adds warehouse `preparationCapacityPerDay` (optional, defaults to unlimited).
 - Future versions should add a new migration branch and keep previous branches intact for backward compatibility.
 
 Keyboard shortcuts
