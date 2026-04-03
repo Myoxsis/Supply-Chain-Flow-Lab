@@ -92,6 +92,59 @@ input[type="range"] { width: 100%; margin-top: 8px; }
     #0d1219;
   background-size: 96px 96px, 96px 96px, 24px 24px, 24px 24px, auto, auto;
 }
+.node-create-toolbar {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 7200;
+  display: flex;
+  gap: 8px;
+  padding: 8px;
+  border-radius: 12px;
+  border: 1px solid rgba(61, 74, 96, 0.92);
+  background: rgba(12, 18, 28, 0.88);
+  backdrop-filter: blur(6px);
+}
+.node-create-toolbar.hidden {
+  display: none;
+}
+.toolbar-action {
+  font-size: 12px;
+  padding: 7px 9px;
+}
+.canvas-context-menu {
+  position: absolute;
+  z-index: 7400;
+  width: 230px;
+  padding: 10px;
+  border: 1px solid #3b475f;
+  border-radius: 12px;
+  background: rgba(16, 22, 32, 0.98);
+  box-shadow: 0 20px 44px rgba(0, 0, 0, 0.52);
+}
+.canvas-context-menu input {
+  width: 100%;
+  margin-bottom: 8px;
+  border-radius: 8px;
+  border: 1px solid #2f3a4d;
+  background: #0f1520;
+  color: var(--text);
+  padding: 7px 8px;
+}
+.canvas-context-actions {
+  display: grid;
+  gap: 6px;
+}
+.context-action {
+  width: 100%;
+  text-align: left;
+  padding: 8px 10px;
+}
+.context-empty {
+  margin: 8px 0 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
 .analytics-panel {
   border-bottom: 1px solid var(--border);
   background: linear-gradient(180deg, rgba(16, 22, 31, 0.95), rgba(11, 15, 22, 0.95));
