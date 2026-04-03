@@ -17,6 +17,7 @@
 * { box-sizing: border-box; }
 html, body { height: 100%; margin: 0; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: var(--bg); color: var(--text); }
 button, input { font: inherit; }
+textarea, select { font: inherit; }
 body { overflow: hidden; }
 body.space-pan .workspace { cursor: grab; }
 .app-shell { display: grid; grid-template-columns: 320px 1fr; height: 100vh; gap: 0; }
@@ -224,6 +225,27 @@ input[type="range"] { width: 100%; margin-top: 8px; }
   width: 100%; background: #121822; border: 1px solid #313d52; border-radius: 8px;
   padding: 6px 8px; color: var(--text); font-size: 13px;
 }
+.field textarea,
+.field select,
+.code-editor {
+  width: 100%;
+  background: #121822;
+  border: 1px solid #313d52;
+  border-radius: 8px;
+  padding: 6px 8px;
+  color: var(--text);
+  font-size: 13px;
+}
+.field textarea,
+.code-editor {
+  min-height: 96px;
+  resize: vertical;
+}
+.code-editor {
+  margin-top: 8px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  line-height: 1.35;
+}
 .kpis { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 10px; }
 .kpi {
   background: rgba(8,11,17,.48); border: 1px solid rgba(255,255,255,.06); border-radius: 10px; padding: 8px;
@@ -252,6 +274,7 @@ input[type="range"] { width: 100%; margin-top: 8px; }
 .node-card.type-supplier .node-type-chip { color: var(--supplier); background: rgba(111,194,255,.12); }
 .node-card.type-warehouse .node-type-chip { color: var(--warehouse); background: rgba(255,189,102,.12); }
 .node-card.type-plant .node-type-chip { color: var(--plant); background: rgba(142,230,139,.12); }
+.node-card.type-analytics .node-type-chip { color: #d9a8ff; background: rgba(217,168,255,.14); }
 .selection-grid { display: grid; gap: 8px; }
 .selection-grid .selection-row {
   display: flex;

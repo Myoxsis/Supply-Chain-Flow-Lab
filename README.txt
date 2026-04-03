@@ -13,6 +13,7 @@ How to run
 What this draft does
 - ComfyUI-inspired dark node canvas.
 - Add Supplier, Warehouse, and Plant nodes.
+- Add Analytics nodes that publish KPI cards from graph inputs.
 - Pan canvas with middle mouse or hold Space + drag.
 - Zoom with mouse wheel centered on cursor.
 - Box-select nodes by dragging empty canvas space.
@@ -27,6 +28,7 @@ What this draft does
   - Warehouse dispatches with preparation + delivery lead time.
   - Plant consumes at its consumption rate.
 - Event log and selection inspector.
+- Global Python script box + per-Analytics-node Python snippets (stored in graph state for backend execution workflows).
 
 Keyboard shortcuts
 - Delete / Backspace: delete selected node(s) or selected link.

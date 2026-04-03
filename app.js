@@ -10,6 +10,7 @@ const kpiBar = document.getElementById('kpiBar');
 const inventoryChart = document.getElementById('inventoryChart');
 const shipmentChart = document.getElementById('shipmentChart');
 const analyticsNodeSelect = document.getElementById('analyticsNodeSelect');
+const globalPythonCodeEl = document.getElementById('globalPythonCode');
 const tempLinkPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
 tempLinkPath.setAttribute('class', 'link-path temp-link hidden');
 linksSvg.appendChild(tempLinkPath);
@@ -52,6 +53,31 @@ const NODE_SCHEMAS = {
       { key: 'safetyStock', label: 'Safety stock (optional)', type: 'int', required: false, min: 0, step: 1, defaultValue: null },
     ],
   },
+  analytics: {
+    label: 'Analytics',
+    fields: [
+      { key: 'name', label: 'Name', type: 'string', required: true, defaultValue: (i) => `Analytics ${i}` },
+      {
+        key: 'metric',
+        label: 'Metric',
+        type: 'select',
+        required: true,
+        options: [
+          { value: 'stockout_count', label: 'Stockout events' },
+          { value: 'avg_plant_inventory', label: 'Avg plant inventory' },
+          { value: 'warehouse_utilization', label: 'Warehouse utilization %' },
+          { value: 'on_time_rate', label: 'On-time delivery %' },
+          { value: 'total_shipped', label: 'Total shipped volume' },
+          { value: 'shipments_today', label: 'Shipments today' },
+          { value: 'node_inventory', label: 'Connected node inventory' },
+          { value: 'node_shipped', label: 'Connected node shipped' },
+          { value: 'node_stockouts', label: 'Connected node stockouts' },
+        ],
+        defaultValue: 'stockout_count',
+      },
+      { key: 'pythonCode', label: 'Python code (node level)', type: 'text', required: false, defaultValue: '' },
+    ],
+  },
 };
 
 const state = {
@@ -86,6 +112,7 @@ const state = {
   camera: { x: 0, y: 0, zoom: 1 },
   keyState: { space: false },
   graphErrors: [],
+  globalPythonCode: '',
 };
 
 function createNodeData(type) {
@@ -126,6 +153,7 @@ function addNode(type, x = 80 + state.nodes.length * 40, y = 60 + state.nodes.le
 
 function resolveInitialInventory(type, data) {
   if (type === 'supplier') return data.initialInventory == null ? Infinity : data.initialInventory;
+  if (type === 'analytics') return 0;
   return data.initialInventory;
 }
 
@@ -186,10 +214,17 @@ function getNodeBody(node) {
     .map((field) => {
       const value = node[field.key] == null ? '' : node[field.key];
       const error = getFieldError(node, field.key);
+      const inputHtml = field.type === 'select'
+        ? `<select data-field="${field.key}">
+            ${(field.options ?? []).map((option) => `<option value="${option.value}" ${String(value) === String(option.value) ? 'selected' : ''}>${option.label}</option>`).join('')}
+          </select>`
+        : field.type === 'text'
+          ? `<textarea data-field="${field.key}" spellcheck="false">${value}</textarea>`
+          : `<input type="number" min="${field.min ?? 0}" step="${field.step ?? 1}" data-field="${field.key}" value="${value}" />`;
       return `
         <div class="field ${error ? 'invalid' : ''}">
           <label>${field.label}</label>
-          <input type="number" min="${field.min ?? 0}" step="${field.step ?? 1}" data-field="${field.key}" value="${value}" />
+          ${inputHtml}
           ${error ? `<div class="field-error">${error}</div>` : ''}
         </div>`;
     })
@@ -211,6 +246,11 @@ function getNodeBody(node) {
         <div class="kpi"><span class="label">On hand</span><span class="value">${node.inventory}</span></div>
         <div class="kpi"><span class="label">Stockouts</span><span class="value">${node.stockouts}</span></div>
       </div>`,
+    analytics: `
+      <div class="kpis">
+        <div class="kpi"><span class="label">Metric</span><span class="value">${node.metric}</span></div>
+        <div class="kpi"><span class="label">Python lines</span><span class="value">${(node.pythonCode || '').split('\n').filter((line) => line.trim()).length}</span></div>
+      </div>`,
   };
 
   return `${fieldsHtml}${commonKpis[node.type]}`;
@@ -220,8 +260,13 @@ function bindFieldEvents(body, node) {
   body.querySelectorAll('[data-field]').forEach((input) => {
     input.addEventListener('input', (e) => {
       const field = e.target.dataset.field;
-      const raw = e.target.value.trim();
-      const value = raw === '' ? null : Number(raw);
+      const fieldSchema = NODE_SCHEMAS[node.type].fields.find((item) => item.key === field);
+      const raw = e.target.value;
+      let value = raw;
+      if (fieldSchema?.type === 'int') {
+        const trimmed = raw.trim();
+        value = trimmed === '' ? null : Number(trimmed);
+      }
       node[field] = value;
       node.initial[field] = value;
       if (field === 'initialInventory') {
@@ -239,9 +284,19 @@ function validateNode(node) {
   const errors = {};
   schema.fields.forEach((field) => {
     const value = node[field.key];
-    if (field.type === 'string') {
+    if (field.type === 'string' || field.type === 'text') {
       if (field.required && (!value || !String(value).trim())) {
         errors[field.key] = `${field.label} is required.`;
+      }
+      return;
+    }
+    if (field.type === 'select') {
+      if (field.required && !value) {
+        errors[field.key] = `${field.label} is required.`;
+        return;
+      }
+      if (value && !(field.options ?? []).some((option) => option.value === value)) {
+        errors[field.key] = `${field.label} has an invalid selection.`;
       }
       return;
     }
@@ -288,7 +343,7 @@ function validateAll() {
     const from = getNode(link.from);
     const to = getNode(link.to);
     if (!from || !to || !isValidLink(from, to)) {
-      state.graphErrors.push(`Invalid link ${link.id}. Allowed: Supplier→Warehouse/Plant, Warehouse→Plant.`);
+      state.graphErrors.push(`Invalid link ${link.id}. Allowed: Supplier→Warehouse/Plant/Analytics, Warehouse→Plant/Analytics, Plant→Analytics.`);
     }
   });
 }
@@ -494,6 +549,7 @@ function tryCreateLink(fromId, toId) {
 }
 
 function isValidLink(from, to) {
+  if (to.type === 'analytics' && from.type !== 'analytics') return true;
   if (from.type === 'supplier' && (to.type === 'warehouse' || to.type === 'plant')) return true;
   if (from.type === 'warehouse' && to.type === 'plant') return true;
   return false;
@@ -568,10 +624,11 @@ function renderSelection() {
       <div class="selection-row"><span>Type</span><strong>${node.type}</strong></div>
       <div class="selection-row"><span>Incoming</span><strong>${incoming}</strong></div>
       <div class="selection-row"><span>Outgoing</span><strong>${outgoing}</strong></div>
-      <div class="selection-row"><span>Inventory</span><strong>${Number.isFinite(node.inventory) ? node.inventory : '∞'}</strong></div>
+      ${node.type !== 'analytics' ? `<div class="selection-row"><span>Inventory</span><strong>${Number.isFinite(node.inventory) ? node.inventory : '∞'}</strong></div>` : ''}
       ${node.type === 'supplier' ? `<div class="selection-row"><span>Frequency</span><strong>${node.deliveryFrequencyDays} days</strong></div>` : ''}
       ${node.type === 'warehouse' ? `<div class="selection-row"><span>Prep + Delivery</span><strong>${node.preparationTimeDays + node.deliveryToPlantDays} days</strong></div>` : ''}
       ${node.type === 'plant' ? `<div class="selection-row"><span>Consumption</span><strong>${node.consumptionRatePerDay}/day</strong></div>` : ''}
+      ${node.type === 'analytics' ? `<div class="selection-row"><span>Metric</span><strong>${node.metric}</strong></div>` : ''}
     </div>
     ${nodeErrors.length ? `<div class="validation-block"><strong>Validation errors</strong><ul>${nodeErrors.map((e) => `<li>${e}</li>`).join('')}</ul></div>` : '<div class="validation-ok">No validation errors.</div>'}
     ${graphErrorsHtml}`;
@@ -842,6 +899,7 @@ function serializeGraph() {
   return {
     version: 1,
     day: state.day,
+    globalPythonCode: state.globalPythonCode,
     nodes: state.nodes.map((node) => {
       const schemaKeys = NODE_SCHEMAS[node.type].fields.map((f) => f.key);
       const config = schemaKeys.reduce((acc, key) => {
@@ -883,30 +941,55 @@ function renderAnalytics() {
   renderShipmentChart();
 }
 
-function renderKpiBar() {
-  const plants = state.nodes.filter((n) => n.type === 'plant');
-  const warehouses = state.nodes.filter((n) => n.type === 'warehouse');
-  const stockoutPlants = new Set(state.stockoutEvents.map((e) => e.nodeId)).size;
-  const recentShipmentCount = state.shipmentsByDay.at(-1)?.count ?? 0;
-  const utilizationRows = warehouses
-    .map((warehouse) => {
-      const history = state.inventoryHistoryByNode[warehouse.id] ?? [];
-      if (!history.length || !warehouse.storageCapacity) return null;
-      const avg = history.reduce((sum, pt) => sum + (pt.inventory ?? 0), 0) / history.length;
-      return `<div class="selection-row"><span>${warehouse.name}</span><strong>${Math.round((avg / warehouse.storageCapacity) * 100)}%</strong></div>`;
-    })
-    .filter(Boolean)
-    .join('');
+function getPrimaryAnalyticsSource(analyticsNode) {
+  const inputLink = state.links.find((link) => link.to === analyticsNode.id);
+  return inputLink ? getNode(inputLink.from) : null;
+}
 
-  kpiBar.innerHTML = `
-    <div class="kpi-pill"><span>Stockout events</span><strong>${state.kpis.stockoutCount}</strong></div>
-    <div class="kpi-pill"><span>Plants hit</span><strong>${stockoutPlants}/${plants.length}</strong></div>
-    <div class="kpi-pill"><span>Avg plant inventory</span><strong>${Math.round(state.kpis.averagePlantInventory)}</strong></div>
-    <div class="kpi-pill"><span>Warehouse utilization</span><strong>${Math.round(state.kpis.warehouseUtilization * 100)}%</strong></div>
-    <div class="kpi-pill"><span>Total shipped</span><strong>${state.kpis.totalShippedVolume}</strong></div>
-    <div class="kpi-pill"><span>Shipments today</span><strong>${recentShipmentCount}</strong></div>
-    ${utilizationRows ? `<div class="kpi-pill" style="grid-column: 1 / -1;"><span>Warehouse utilization by node</span><div class="selection-grid">${utilizationRows}</div></div>` : ''}
-  `;
+function readMetricValue(analyticsNode) {
+  const source = getPrimaryAnalyticsSource(analyticsNode);
+  switch (analyticsNode.metric) {
+    case 'stockout_count':
+      return state.kpis.stockoutCount;
+    case 'avg_plant_inventory':
+      return Math.round(state.kpis.averagePlantInventory);
+    case 'warehouse_utilization':
+      return `${Math.round(state.kpis.warehouseUtilization * 100)}%`;
+    case 'on_time_rate':
+      return `${Math.round(state.kpis.onTimeDeliveries.rate * 100)}%`;
+    case 'total_shipped':
+      return state.kpis.totalShippedVolume;
+    case 'shipments_today':
+      return state.shipmentsByDay.at(-1)?.count ?? 0;
+    case 'node_inventory':
+      return source ? (Number.isFinite(source.inventory) ? source.inventory : '∞') : '—';
+    case 'node_shipped':
+      return source ? source.shipped : '—';
+    case 'node_stockouts':
+      return source ? source.stockouts : '—';
+    default:
+      return '—';
+  }
+}
+
+function renderKpiBar() {
+  const analyticsNodes = state.nodes.filter((node) => node.type === 'analytics');
+  if (!analyticsNodes.length) {
+    kpiBar.innerHTML = '<div class="kpi-pill" style="grid-column: 1 / -1;"><span>No analytics nodes yet</span><strong>Add an Analytics node to publish metrics.</strong></div>';
+    return;
+  }
+
+  kpiBar.innerHTML = analyticsNodes.map((node) => {
+    const source = getPrimaryAnalyticsSource(node);
+    const value = readMetricValue(node);
+    return `
+      <div class="kpi-pill">
+        <span>${node.name}</span>
+        <strong>${value}</strong>
+        <div class="chart-meta">${node.metric}${source ? ` · source: ${source.name}` : ''}</div>
+      </div>
+    `;
+  }).join('');
 }
 
 function renderInventoryChart() {
@@ -1231,6 +1314,7 @@ window.addEventListener('keyup', (e) => {
 document.getElementById('addSupplier').addEventListener('click', () => addNode('supplier'));
 document.getElementById('addWarehouse').addEventListener('click', () => addNode('warehouse'));
 document.getElementById('addPlant').addEventListener('click', () => addNode('plant'));
+document.getElementById('addAnalytics').addEventListener('click', () => addNode('analytics'));
 document.getElementById('clearLinks').addEventListener('click', () => {
   state.links = [];
   state.selectedLinkIds = [];
@@ -1252,12 +1336,18 @@ document.getElementById('clearLogBtn').addEventListener('click', () => {
   eventLog.innerHTML = '';
   state.eventLog = [];
 });
+globalPythonCodeEl.addEventListener('input', (e) => {
+  state.globalPythonCode = e.target.value;
+});
+state.globalPythonCode = globalPythonCodeEl.value;
 
 addNode('supplier', 80, 90);
 addNode('warehouse', 430, 120);
 addNode('plant', 800, 150);
+addNode('analytics', 1070, 120);
 state.links.push({ id: `link-${state.linkCounter++}`, from: state.nodes[0].id, to: state.nodes[1].id });
 state.links.push({ id: `link-${state.linkCounter++}`, from: state.nodes[1].id, to: state.nodes[2].id });
+state.links.push({ id: `link-${state.linkCounter++}`, from: state.nodes[2].id, to: state.nodes[3].id });
 validateAll();
 initializeSimulationTracking();
 fitToGraph();
@@ -1267,7 +1357,7 @@ log('Starter scenario loaded');
 
 window.SupplyChainFlowLab = {
   serializeGraph,
-  getState: () => structuredClone({ nodes: state.nodes, links: state.links, graphErrors: state.graphErrors }),
+  getState: () => structuredClone({ nodes: state.nodes, links: state.links, graphErrors: state.graphErrors, globalPythonCode: state.globalPythonCode }),
   stepSimulation,
   simulateDays,
   getSimulationOutput: buildSimulationOutput,

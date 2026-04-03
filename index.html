@@ -23,8 +23,17 @@
           <button id="addSupplier">+ Supplier</button>
           <button id="addWarehouse">+ Warehouse</button>
           <button id="addPlant">+ Plant</button>
+          <button id="addAnalytics">+ Analytics</button>
           <button id="clearLinks" class="ghost">Clear Links</button>
         </div>
+      </section>
+
+      <section class="panel">
+        <h2>Global Python</h2>
+        <label for="globalPythonCode">Shared script for the whole node app</label>
+        <textarea id="globalPythonCode" class="code-editor" spellcheck="false" placeholder="# Shared helpers for analytics nodes
+def clamp(value, min_value, max_value):
+    return max(min_value, min(value, max_value))"></textarea>
       </section>
 
       <section class="panel">
