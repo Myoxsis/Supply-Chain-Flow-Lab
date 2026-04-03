@@ -132,6 +132,26 @@ test('engine handles multiple shipments in transit on the same link', () => {
   assert.equal(state.nodes.find((n) => n.id === 'plant-1').received, 10);
 });
 
+test('supplier delivery quantity is a per-day budget across outbound links', () => {
+  const { state, simulateDays } = buildHarness({
+    nodes: [
+      { id: 'supplier-1', type: 'supplier', name: 'Supplier', inventory: Infinity, deliveryFrequencyDays: 1, deliveryQuantity: 10, leadTimeDays: 0 },
+      { id: 'plant-1', type: 'plant', name: 'Plant A', inventory: 0, consumptionRatePerDay: 0, safetyStock: 0, stockoutPenaltyPerUnit: 0 },
+      { id: 'plant-2', type: 'plant', name: 'Plant B', inventory: 0, consumptionRatePerDay: 0, safetyStock: 0, stockoutPenaltyPerUnit: 0 },
+    ],
+    links: [
+      { id: 'l1', from: 'supplier-1', to: 'plant-1', materialName: 'Ore', priority: 1, maxDailyCapacity: 100, transportDelayDays: 0, costPerShipment: 0 },
+      { id: 'l2', from: 'supplier-1', to: 'plant-2', materialName: 'Ore', priority: 2, maxDailyCapacity: 100, transportDelayDays: 0, costPerShipment: 0 },
+    ],
+  });
+
+  simulateDays(1);
+
+  assert.equal(state.shipments.length, 1);
+  assert.equal(state.shipments[0].to, 'plant-1');
+  assert.equal(state.shipments[0].qty, 10);
+});
+
 test('end-to-end scenario is deterministic for a fixed graph and timeline', () => {
   const runScenario = () => {
     const { state, simulateDays } = buildHarness({

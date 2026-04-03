@@ -180,17 +180,21 @@ export function createSimulationEngine(context) {
     processArrivals();
     state.nodes.filter((n) => n.type === 'supplier').forEach((supplier) => {
       if (state.day % supplier.deliveryFrequencyDays !== 0) return;
+      let remainingSupplierBudget = Number(supplier.deliveryQuantity);
+      if (!Number.isFinite(remainingSupplierBudget) || remainingSupplierBudget <= 0) return;
       let shippedToday = 0;
       state.links.filter((l) => l.from === supplier.id).slice().sort((a, b) => a.priority - b.priority).forEach((link) => {
+        if (remainingSupplierBudget <= 0) return;
         const target = getNode(link.to);
         if (!target || (Number.isFinite(supplier.inventory) && supplier.inventory <= 0)) return;
         const cap = getRemainingLinkCapacity(link, state.day);
         if (cap <= 0) return;
-        const qtyCap = Math.min(supplier.deliveryQuantity, cap);
+        const qtyCap = Math.min(remainingSupplierBudget, cap);
         const qty = Number.isFinite(supplier.inventory) ? Math.min(qtyCap, supplier.inventory) : qtyCap;
         if (qty <= 0) return;
         queueShipment(supplier, target, link, qty, supplier.leadTimeDays + link.transportDelayDays, { plantId: target.type === 'plant' ? target.id : null });
         if (Number.isFinite(supplier.inventory)) supplier.inventory -= qty;
+        remainingSupplierBudget -= qty;
         supplier.shipped += qty;
         shippedToday += qty;
       });

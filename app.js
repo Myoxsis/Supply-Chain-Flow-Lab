@@ -13,6 +13,7 @@ import {
 } from './src/graph-model.js';
 import { createSimulationEngine } from './src/simulation-engine.js';
 import { BUILT_IN_SCENARIOS, GRID_SIZE, MAX_ZOOM, MIN_ZOOM, SCENARIO_STORAGE_KEY, createInitialState } from './src/app-state.js';
+import { verifyScenarioChecksum, withScenarioMeta } from './src/scenario-io.js';
 
 const workspace = document.getElementById('workspace');
 const linksSvg = document.getElementById('linksSvg');
@@ -63,6 +64,7 @@ linksSvg.appendChild(tempLinkPath);
 const selectionBox = document.createElement('div');
 selectionBox.className = 'selection-box hidden';
 workspace.appendChild(selectionBox);
+const SCENARIO_STORAGE_BACKUP_KEY = `${SCENARIO_STORAGE_KEY}:backup`;
 
 const state = createInitialState();
 
@@ -1177,6 +1179,15 @@ function computeKpis() {
   const averageFulfillmentDelayDays = state.deliveryStats.fulfilledRequests
     ? state.deliveryStats.fulfillmentDelayTotal / state.deliveryStats.fulfilledRequests
     : 0;
+  const totalPlantDemand = plants.reduce((sum, plant) => sum + (plant.consumptionRatePerDay * state.day), 0);
+  const totalDeliveredToPlants = plants.reduce((sum, plant) => sum + plant.received, 0);
+  const fillRate = totalPlantDemand > 0 ? totalDeliveredToPlants / totalPlantDemand : 1;
+  const averageDaysOfCover = plants.length
+    ? plants.reduce((sum, plant) => {
+      const dailyDemand = Math.max(1, Number(plant.consumptionRatePerDay) || 0);
+      return sum + ((Number(plant.inventory) || 0) / dailyDemand);
+    }, 0) / plants.length
+    : 0;
 
   state.kpis = {
     stockoutCount,
@@ -1189,6 +1200,8 @@ function computeKpis() {
     },
     averageQueueTimeDays: Number(averageQueueTimeDays.toFixed(2)),
     averageFulfillmentDelayDays: Number(averageFulfillmentDelayDays.toFixed(2)),
+    fillRate: Number(fillRate.toFixed(4)),
+    averageDaysOfCover: Number(averageDaysOfCover.toFixed(2)),
     totalShippedVolume: state.nodes.reduce((sum, node) => sum + node.shipped, 0),
     totalShipmentCost: Number(state.deliveryStats.shipmentCost.toFixed(2)),
     totalCost: Number(state.finance.totalCost.toFixed(2)),
@@ -1374,6 +1387,7 @@ function clearGraph() {
   state.selectedNodeIds = [];
   state.selectedLinkIds = [];
   state.analyticsNodeId = null;
+  state.scenarioMeta = { label: 'Untitled scenario', savedAt: null, checksum: null };
   state.analyticsMetricHistoryByNode = {};
   state.graphErrors = [];
   state.nodeStatusById = {};
@@ -1400,6 +1414,11 @@ function importScenarioObject(rawScenario, options = {}) {
 
   clearGraph();
   state.day = Number.isInteger(scenario.day) && scenario.day >= 0 ? scenario.day : 0;
+  state.scenarioMeta = {
+    label: typeof scenario.meta?.label === 'string' ? scenario.meta.label : 'Imported scenario',
+    savedAt: typeof scenario.meta?.savedAt === 'string' ? scenario.meta.savedAt : null,
+    checksum: typeof scenario.meta?.checksum === 'string' ? scenario.meta.checksum : null,
+  };
   state.scenarioDescription = getScenarioDescriptionText(scenario.description);
   renderScenarioDescription(state.scenarioDescription);
   state.globalPythonCode = typeof scenario.globalPythonCode === 'string' ? scenario.globalPythonCode : '';
@@ -1486,11 +1505,15 @@ function importScenarioObject(rawScenario, options = {}) {
     renderAnalytics();
   }
   updateOperationalAlerting({ logTransitions: false });
+  const checksumState = verifyScenarioChecksum(scenario);
+  if (!checksumState.ok) {
+    logWithLevel(`[WARN] Scenario checksum mismatch. Expected ${checksumState.expected} but received ${checksumState.received}.`, 'alert');
+  }
   if (!options.silent) log(options.logMessage ?? 'Scenario loaded');
 }
 
 function serializeGraph() {
-  return {
+  const scenario = {
     version: SCENARIO_VERSION,
     day: state.day,
     description: state.scenarioDescription,
@@ -1515,27 +1538,37 @@ function serializeGraph() {
       costPerShipment: l.costPerShipment,
     })),
   };
+  return withScenarioMeta(scenario, {
+    label: state.scenarioMeta?.label ?? 'Working scenario',
+  });
 }
 
 function persistScenarioToLocalStorage() {
   try {
-    localStorage.setItem(SCENARIO_STORAGE_KEY, JSON.stringify(serializeGraph()));
+    const payload = JSON.stringify(serializeGraph());
+    localStorage.setItem(SCENARIO_STORAGE_BACKUP_KEY, localStorage.getItem(SCENARIO_STORAGE_KEY) ?? payload);
+    localStorage.setItem(SCENARIO_STORAGE_KEY, payload);
   } catch (error) {
     console.warn('Failed to save scenario to localStorage', error);
   }
 }
 
 function loadScenarioFromLocalStorage() {
-  const raw = localStorage.getItem(SCENARIO_STORAGE_KEY);
-  if (!raw) return false;
-  try {
-    importScenarioObject(JSON.parse(raw), { logMessage: 'Scenario restored from local storage' });
-    return true;
-  } catch (error) {
-    console.warn('Failed to restore scenario from localStorage', error);
-    log(`Could not restore saved scenario (${error.message}). Loading demo instead.`);
-    return false;
+  const payloads = [
+    { raw: localStorage.getItem(SCENARIO_STORAGE_KEY), source: 'local storage' },
+    { raw: localStorage.getItem(SCENARIO_STORAGE_BACKUP_KEY), source: 'backup snapshot' },
+  ];
+  for (const payload of payloads) {
+    if (!payload.raw) continue;
+    try {
+      importScenarioObject(JSON.parse(payload.raw), { logMessage: `Scenario restored from ${payload.source}` });
+      return true;
+    } catch (error) {
+      console.warn(`Failed to restore scenario from ${payload.source}`, error);
+    }
   }
+  log('Could not restore saved scenario from local storage. Loading demo instead.');
+  return false;
 }
 
 let autosaveHandle = null;
@@ -1729,12 +1762,25 @@ function renderAnalyticsNodeCharts() {
 function renderKpiBar() {
   if (!kpiBar) return;
   const analyticsNodes = state.nodes.filter((node) => node.type === 'analytics');
-  if (!analyticsNodes.length) {
-    kpiBar.innerHTML = '<div class="kpi-pill" style="grid-column: 1 / -1;"><span>No analytics nodes yet</span><strong>Add an Analytics node to publish metrics.</strong></div>';
-    return;
-  }
+  const operationalCards = [
+    {
+      label: 'Fill rate',
+      value: `${Math.round((state.kpis.fillRate ?? 0) * 100)}%`,
+      meta: `${state.kpis.totalShippedVolume} units shipped`,
+    },
+    {
+      label: 'Avg days of cover',
+      value: `${(state.kpis.averageDaysOfCover ?? 0).toFixed(1)} d`,
+      meta: `Across ${state.nodes.filter((node) => node.type === 'plant').length} plants`,
+    },
+    {
+      label: 'Stockout events',
+      value: String(state.kpis.stockoutCount ?? 0),
+      meta: `On-time deliveries ${Math.round((state.kpis.onTimeDeliveries?.rate ?? 0) * 100)}%`,
+    },
+  ];
 
-  kpiBar.innerHTML = analyticsNodes.map((node) => {
+  const analyticsCards = analyticsNodes.map((node) => {
     const source = getPrimaryAnalyticsSource(node);
     const value = readMetricValue(node);
     return `
@@ -1744,7 +1790,24 @@ function renderKpiBar() {
         <div class="chart-meta">${node.metric}${source ? ` · source: ${source.name}` : ''}</div>
       </div>
     `;
-  }).join('');
+  });
+
+  const cardsHtml = [
+    ...operationalCards.map((card) => `
+      <div class="kpi-pill">
+        <span>${card.label}</span>
+        <strong>${card.value}</strong>
+        <div class="chart-meta">${card.meta}</div>
+      </div>
+    `),
+    ...analyticsCards,
+  ];
+
+  if (!analyticsNodes.length) {
+    cardsHtml.push('<div class="kpi-pill"><span>Analytics</span><strong>Add an Analytics node</strong><div class="chart-meta">Connect it to a node to publish custom metrics.</div></div>');
+  }
+
+  kpiBar.innerHTML = cardsHtml.join('');
 }
 
 function renderInventoryChart() {

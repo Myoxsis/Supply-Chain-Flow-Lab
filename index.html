@@ -130,6 +130,27 @@ def clamp(value, min_value, max_value):
         <button id="distributeVerticalBtn" class="ghost small">Distribute V</button>
         <label class="inline-toggle"><input id="snapToGrid" type="checkbox" /> Snap to grid</label>
       </div>
+      <section class="analytics-panel">
+        <div id="kpiBar" class="kpi-bar"></div>
+        <div class="chart-grid">
+          <article class="chart-card">
+            <div class="chart-header">
+              <h3>Inventory trend</h3>
+              <select id="analyticsNodeSelect" aria-label="Analytics node">
+                <option value="">No nodes</option>
+              </select>
+            </div>
+            <svg id="inventoryChart" class="chart-svg" viewBox="0 0 640 180" preserveAspectRatio="none"></svg>
+          </article>
+          <article class="chart-card">
+            <div class="chart-header">
+              <h3>Shipment throughput</h3>
+              <span class="chart-meta">Daily dispatch count</span>
+            </div>
+            <svg id="shipmentChart" class="chart-svg" viewBox="0 0 640 180" preserveAspectRatio="none"></svg>
+          </article>
+        </div>
+      </section>
 
       <section id="workspace" class="workspace">
         <div id="nodeCreateToolbar" class="node-create-toolbar">
