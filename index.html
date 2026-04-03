@@ -64,38 +64,6 @@ def clamp(value, min_value, max_value):
       </section>
 
       <section class="panel">
-        <h2>Simulation</h2>
-        <div class="button-grid sim-grid">
-          <button id="startBtn">Start simulation</button>
-          <button id="pauseBtn" class="ghost">Pause</button>
-          <button id="resumeBtn">Resume</button>
-          <button id="stepBtn" class="ghost">Step one day</button>
-          <button id="resetBtn" class="ghost">Reset simulation</button>
-        </div>
-        <div class="sim-status-row">
-          <span class="meta-label">Status</span>
-          <strong id="simStatusValue">Idle</strong>
-        </div>
-        <label>
-          Speed
-          <div class="range-with-value">
-            <input id="tickSpeed" type="range" min="120" max="1500" step="20" value="800" />
-            <span id="tickSpeedValue">800 ms/day</span>
-          </div>
-        </label>
-        <div class="stats-row">
-          <div>
-            <span class="meta-label">Current simulated day</span>
-            <strong id="dayValue">0</strong>
-          </div>
-          <div>
-            <span class="meta-label">In transit</span>
-            <strong id="transitValue">0</strong>
-          </div>
-        </div>
-      </section>
-
-      <section class="panel">
         <h2>How it works</h2>
         <ul>
           <li>Drag nodes around the canvas.</li>
@@ -127,7 +95,28 @@ def clamp(value, min_value, max_value):
           <span><i class="dot warehouse"></i>Warehouse</span>
           <span><i class="dot plant"></i>Plant</span>
         </div>
-        <button id="toggleCreateToolbar" class="ghost small">Quick add</button>
+        <div class="topbar-controls">
+          <section class="sim-controls-inline">
+            <div class="sim-inline-actions">
+              <button id="startBtn" class="small">Start</button>
+              <button id="pauseBtn" class="ghost small">Pause</button>
+              <button id="resumeBtn" class="small">Resume</button>
+              <button id="stepBtn" class="ghost small">Step</button>
+              <button id="resetBtn" class="ghost small">Reset</button>
+            </div>
+            <div class="sim-inline-meta">
+              <span>Status <strong id="simStatusValue">Idle</strong></span>
+              <span>Day <strong id="dayValue">0</strong></span>
+              <span>Transit <strong id="transitValue">0</strong></span>
+              <label class="sim-speed-inline">
+                <span>Speed</span>
+                <input id="tickSpeed" type="range" min="120" max="1500" step="20" value="800" />
+                <span id="tickSpeedValue">800 ms/day</span>
+              </label>
+            </div>
+          </section>
+          <button id="toggleCreateToolbar" class="ghost small">Quick add</button>
+        </div>
       </header>
       <div class="graph-edit-toolbar">
         <button id="copySelectionBtn" class="ghost small">Copy</button>
