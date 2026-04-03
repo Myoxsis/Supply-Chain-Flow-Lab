@@ -11,6 +11,9 @@ const inventoryChart = document.getElementById('inventoryChart');
 const shipmentChart = document.getElementById('shipmentChart');
 const analyticsNodeSelect = document.getElementById('analyticsNodeSelect');
 const globalPythonCodeEl = document.getElementById('globalPythonCode');
+const showLinkLabelsInput = document.getElementById('showLinkLabels');
+const allowWarehouseToWarehouseInput = document.getElementById('allowWarehouseToWarehouse');
+const allowPlantOutboundInput = document.getElementById('allowPlantOutbound');
 const tempLinkPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
 tempLinkPath.setAttribute('class', 'link-path temp-link hidden');
 linksSvg.appendChild(tempLinkPath);
@@ -87,7 +90,7 @@ const state = {
   eventLog: [],
   inventoryHistoryByNode: {},
   transitHistory: [],
-  deliveryStats: { dispatched: 0, onTime: 0, deliveredVolume: 0 },
+  deliveryStats: { dispatched: 0, onTime: 0, deliveredVolume: 0, shipmentCost: 0 },
   shipmentsByDay: [],
   stockoutEvents: [],
   analyticsNodeId: null,
@@ -97,6 +100,7 @@ const state = {
     warehouseUtilization: 0,
     onTimeDeliveries: { onTime: 0, total: 0, rate: 0 },
     totalShippedVolume: 0,
+    totalShipmentCost: 0,
   },
   day: 0,
   drag: null,
@@ -113,7 +117,20 @@ const state = {
   keyState: { space: false },
   graphErrors: [],
   globalPythonCode: '',
+  ui: {
+    showLinkLabels: false,
+    allowWarehouseToWarehouse: false,
+    allowPlantOutbound: false,
+  },
 };
+
+const LINK_SCHEMA = [
+  { key: 'materialName', label: 'Material name', type: 'string', required: true, defaultValue: 'Raw material' },
+  { key: 'transportDelayDays', label: 'Transport delay (days)', type: 'int', required: true, min: 0, step: 1, defaultValue: 1 },
+  { key: 'maxDailyCapacity', label: 'Max daily capacity', type: 'int', required: true, min: 1, step: 1, defaultValue: 120 },
+  { key: 'priority', label: 'Priority', type: 'int', required: true, min: 1, step: 1, defaultValue: 1 },
+  { key: 'costPerShipment', label: 'Cost per shipment (optional)', type: 'number', required: false, min: 0, step: 0.01, defaultValue: null },
+];
 
 function createNodeData(type) {
   const schema = NODE_SCHEMAS[type];
@@ -342,14 +359,78 @@ function validateAll() {
   state.links.forEach((link) => {
     const from = getNode(link.from);
     const to = getNode(link.to);
-    if (!from || !to || !isValidLink(from, to)) {
-      state.graphErrors.push(`Invalid link ${link.id}. Allowed: Supplier→Warehouse/Plant/Analytics, Warehouse→Plant/Analytics, Plant→Analytics.`);
+    const linkErrors = validateLink(link);
+    link.validationErrors = Object.fromEntries(linkErrors.map((message, idx) => [idx, message]));
+    if (linkErrors.length) {
+      state.graphErrors.push(`Invalid link ${link.id}: ${linkErrors.join(' ')}`);
     }
   });
 }
 
 function hasValidationErrors() {
-  return state.nodes.some((n) => Object.keys(n.validationErrors).length) || state.graphErrors.length > 0;
+  return state.nodes.some((n) => Object.keys(n.validationErrors).length)
+    || state.links.some((l) => Object.keys(l.validationErrors ?? {}).length)
+    || state.graphErrors.length > 0;
+}
+
+function createLinkData() {
+  return LINK_SCHEMA.reduce((acc, field) => {
+    acc[field.key] = typeof field.defaultValue === 'function' ? field.defaultValue() : field.defaultValue;
+    return acc;
+  }, {});
+}
+
+function getLinkLabel(link) {
+  const delay = `${link.transportDelayDays}d`;
+  const cap = `cap ${link.maxDailyCapacity}`;
+  return `${link.materialName} • ${delay} • ${cap} • p${link.priority}`;
+}
+
+function formatLinkCost(value) {
+  if (value == null || Number.isNaN(value)) return '—';
+  return `$${Number(value).toFixed(2)}`;
+}
+
+function validateLink(link) {
+  const errors = [];
+  const from = getNode(link.from);
+  const to = getNode(link.to);
+  if (!from || !to) return ['Missing endpoint node.'];
+  if (!isValidLink(from, to)) errors.push(`Connection ${from.type} → ${to.type} is not allowed.`);
+
+  LINK_SCHEMA.forEach((field) => {
+    const value = link[field.key];
+    if (field.type === 'string') {
+      if (field.required && (!value || !String(value).trim())) {
+        errors.push(`${field.label} is required.`);
+      }
+      return;
+    }
+    if (value == null || value === '') {
+      if (field.required) errors.push(`${field.label} is required.`);
+      return;
+    }
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+      errors.push(`${field.label} must be numeric.`);
+      return;
+    }
+    if (field.type === 'int' && !Number.isInteger(numeric)) {
+      errors.push(`${field.label} must be an integer.`);
+      return;
+    }
+    if (field.min != null && numeric < field.min) {
+      errors.push(`${field.label} must be ≥ ${field.min}.`);
+    }
+  });
+  return errors;
+}
+
+function getRemainingLinkCapacity(link, day) {
+  const shippedToday = state.shipments
+    .filter((shipment) => shipment.linkId === link.id && shipment.departureDay === day)
+    .reduce((sum, shipment) => sum + shipment.qty, 0);
+  return Math.max(0, link.maxDailyCapacity - shippedToday);
 }
 
 function refreshNode(nodeId) {
@@ -538,7 +619,13 @@ function tryCreateLink(fromId, toId) {
   }
   if (state.links.some((l) => l.from === from.id && l.to === to.id)) return;
 
-  const link = { id: `link-${state.linkCounter++}`, from: from.id, to: to.id };
+  const link = {
+    id: `link-${state.linkCounter++}`,
+    from: from.id,
+    to: to.id,
+    ...createLinkData(),
+    validationErrors: {},
+  };
   state.links.push(link);
   state.selectedLinkIds = [link.id];
   state.selectedNodeIds = [];
@@ -550,13 +637,15 @@ function tryCreateLink(fromId, toId) {
 
 function isValidLink(from, to) {
   if (to.type === 'analytics' && from.type !== 'analytics') return true;
+  if (from.type === 'plant' && !state.ui.allowPlantOutbound) return false;
   if (from.type === 'supplier' && (to.type === 'warehouse' || to.type === 'plant')) return true;
   if (from.type === 'warehouse' && to.type === 'plant') return true;
+  if (from.type === 'warehouse' && to.type === 'warehouse' && state.ui.allowWarehouseToWarehouse) return true;
   return false;
 }
 
 function drawLinks() {
-  linksSvg.querySelectorAll('.link-path:not(.temp-link)').forEach((path) => path.remove());
+  linksSvg.querySelectorAll('.link-path:not(.temp-link), .link-label').forEach((el) => el.remove());
   state.links.forEach((link) => {
     const fromEl = workspace.querySelector(`.node-card[data-id="${link.from}"] .out-port`);
     const toEl = workspace.querySelector(`.node-card[data-id="${link.to}"] .in-port`);
@@ -577,6 +666,14 @@ function drawLinks() {
       renderSelection();
     });
     linksSvg.appendChild(path);
+    if (state.ui.showLinkLabels) {
+      const label = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      label.setAttribute('class', 'link-label');
+      label.setAttribute('x', String((p1.x + p2.x) / 2));
+      label.setAttribute('y', String((p1.y + p2.y) / 2 - 8));
+      label.textContent = getLinkLabel(link);
+      linksSvg.appendChild(label);
+    }
   });
   linksSvg.appendChild(tempLinkPath);
 }
@@ -591,12 +688,38 @@ function renderSelection() {
   if (state.selectedLinkIds.length === 1) {
     const link = state.links.find((l) => l.id === state.selectedLinkIds[0]);
     if (link) {
+      const linkErrors = Object.values(link.validationErrors ?? {});
+      const fieldRows = LINK_SCHEMA.map((field) => {
+        const value = link[field.key] == null ? '' : link[field.key];
+        const input = field.type === 'string'
+          ? `<input type="text" data-link-field="${field.key}" value="${value}" />`
+          : `<input type="number" min="${field.min ?? 0}" step="${field.step ?? 1}" data-link-field="${field.key}" value="${value}" />`;
+        return `<label class="field"><span>${field.label}</span>${input}</label>`;
+      }).join('');
       selectionPanel.innerHTML = `
         <div class="selection-grid">
           <div class="selection-row"><span>Selection</span><strong>Link</strong></div>
           <div class="selection-row"><span>From</span><strong>${getNode(link.from)?.name ?? 'Unknown'}</strong></div>
           <div class="selection-row"><span>To</span><strong>${getNode(link.to)?.name ?? 'Unknown'}</strong></div>
-        </div>`;
+          <div class="selection-row"><span>Cost / shipment</span><strong>${formatLinkCost(link.costPerShipment)}</strong></div>
+        </div>
+        <div class="link-editor">${fieldRows}</div>
+        ${linkErrors.length ? `<div class="validation-block"><strong>Link validation errors</strong><ul>${linkErrors.map((e) => `<li>${e}</li>`).join('')}</ul></div>` : '<div class="validation-ok">No link validation errors.</div>'}`;
+      selectionPanel.querySelectorAll('[data-link-field]').forEach((input) => {
+        input.addEventListener('input', (e) => {
+          const fieldKey = e.target.dataset.linkField;
+          const fieldSchema = LINK_SCHEMA.find((item) => item.key === fieldKey);
+          let value = e.target.value;
+          if (fieldSchema.type !== 'string') {
+            value = value.trim() === '' ? null : Number(value);
+            if (fieldSchema.type === 'int' && value != null) value = Math.trunc(value);
+          }
+          link[fieldKey] = value;
+          validateAll();
+          renderSelection();
+          drawLinks();
+        });
+      });
       return;
     }
   }
@@ -684,19 +807,27 @@ function processArrivals() {
       state.deliveryStats.onTime += 1;
     }
     state.deliveryStats.deliveredVolume += receivedQty;
-    log(`${receivedQty} units arrived at ${toNode.name} from ${shipment.fromName}`);
+    log(`${receivedQty} ${shipment.materialName} arrived at ${toNode.name} from ${shipment.fromName}`);
   });
 }
 
 function suppliersShip() {
   state.nodes.filter((n) => n.type === 'supplier').forEach((supplier) => {
     if (state.day % supplier.deliveryFrequencyDays !== 0) return;
-    const targets = state.links.filter((l) => l.from === supplier.id).map((l) => getNode(l.to)).filter(Boolean);
-    targets.forEach((target) => {
+    const outgoingLinks = state.links
+      .filter((l) => l.from === supplier.id)
+      .slice()
+      .sort((a, b) => a.priority - b.priority);
+    outgoingLinks.forEach((link) => {
+      const target = getNode(link.to);
+      if (!target) return;
       if (Number.isFinite(supplier.inventory) && supplier.inventory <= 0) return;
-      const qty = Number.isFinite(supplier.inventory) ? Math.min(supplier.deliveryQuantity, supplier.inventory) : supplier.deliveryQuantity;
+      const linkCapacity = getRemainingLinkCapacity(link, state.day);
+      if (linkCapacity <= 0) return;
+      const qtyCap = Math.min(supplier.deliveryQuantity, linkCapacity);
+      const qty = Number.isFinite(supplier.inventory) ? Math.min(qtyCap, supplier.inventory) : qtyCap;
       if (qty <= 0) return;
-      queueShipment(supplier, target, qty, supplier.leadTimeDays);
+      queueShipment(supplier, target, link, qty, supplier.leadTimeDays + link.transportDelayDays);
       if (Number.isFinite(supplier.inventory)) supplier.inventory -= qty;
       supplier.shipped += qty;
     });
@@ -705,18 +836,26 @@ function suppliersShip() {
 
 function warehousesDispatch() {
   state.nodes.filter((n) => n.type === 'warehouse').forEach((warehouse) => {
-    const plants = state.links.filter((l) => l.from === warehouse.id).map((l) => getNode(l.to)).filter((n) => n?.type === 'plant');
-    plants.forEach((plant) => {
+    const outboundLinks = state.links
+      .filter((l) => l.from === warehouse.id)
+      .slice()
+      .sort((a, b) => a.priority - b.priority);
+    outboundLinks.forEach((link) => {
+      const plant = getNode(link.to);
+      if (plant?.type !== 'plant') return;
       const safety = plant.safetyStock ?? 0;
       const desired = safety + plant.consumptionRatePerDay;
       const need = Math.max(0, desired - plant.inventory);
       if (need <= 0 || warehouse.inventory <= 0) return;
       if (warehouse.reorderPoint != null && warehouse.inventory <= warehouse.reorderPoint) return;
-      const qty = Math.min(need, warehouse.inventory);
-      const totalLead = warehouse.preparationTimeDays + warehouse.deliveryToPlantDays;
+      const linkCapacity = getRemainingLinkCapacity(link, state.day);
+      if (linkCapacity <= 0) return;
+      const qty = Math.min(need, warehouse.inventory, linkCapacity);
+      const totalLead = warehouse.preparationTimeDays + warehouse.deliveryToPlantDays + link.transportDelayDays;
+      if (qty <= 0) return;
       warehouse.inventory -= qty;
       warehouse.shipped += qty;
-      queueShipment(warehouse, plant, qty, totalLead);
+      queueShipment(warehouse, plant, link, qty, totalLead);
     });
   });
 }
@@ -754,6 +893,8 @@ function recordDailyHistory() {
     shipments: state.shipments.map((shipment) => ({
       from: shipment.from,
       to: shipment.to,
+      linkId: shipment.linkId,
+      materialName: shipment.materialName,
       qty: shipment.qty,
       departureDay: shipment.departureDay,
       arrivalDay: shipment.arrivalDay,
@@ -798,6 +939,7 @@ function computeKpis() {
       rate: Number(onTimeRate.toFixed(4)),
     },
     totalShippedVolume: state.nodes.reduce((sum, node) => sum + node.shipped, 0),
+    totalShipmentCost: Number(state.deliveryStats.shipmentCost.toFixed(2)),
   };
 }
 
@@ -828,6 +970,8 @@ function buildSimulationOutput() {
       shipmentsInTransit: state.shipments.map((shipment) => ({
         from: shipment.from,
         to: shipment.to,
+        linkId: shipment.linkId,
+        materialName: shipment.materialName,
         qty: shipment.qty,
         departureDay: shipment.departureDay,
         arrivalDay: shipment.arrivalDay,
@@ -840,8 +984,10 @@ function buildSimulationOutput() {
   };
 }
 
-function queueShipment(from, to, qty, leadTime) {
+function queueShipment(from, to, link, qty, leadTime) {
   state.deliveryStats.dispatched += 1;
+  const shipmentCost = link.costPerShipment == null ? 0 : Number(link.costPerShipment);
+  if (Number.isFinite(shipmentCost)) state.deliveryStats.shipmentCost += shipmentCost;
   const dayBucket = state.shipmentsByDay[state.shipmentsByDay.length - 1];
   if (dayBucket) {
     dayBucket.count += 1;
@@ -850,19 +996,23 @@ function queueShipment(from, to, qty, leadTime) {
   state.shipments.push({
     from: from.id,
     to: to.id,
+    linkId: link.id,
+    materialName: link.materialName,
+    priority: link.priority,
+    shipmentCost: link.costPerShipment == null ? null : Number(link.costPerShipment),
     qty,
     departureDay: state.day,
     arrivalDay: state.day + leadTime,
     fromName: from.name,
   });
-  log(`${from.name} shipped ${qty} units to ${to.name} (ETA day ${state.day + leadTime})`);
+  log(`${from.name} shipped ${qty} ${link.materialName} to ${to.name} via ${link.id} (ETA day ${state.day + leadTime})`);
 }
 
 function initializeSimulationTracking() {
   state.eventLog = [];
   state.inventoryHistoryByNode = {};
   state.transitHistory = [];
-  state.deliveryStats = { dispatched: 0, onTime: 0, deliveredVolume: 0 };
+  state.deliveryStats = { dispatched: 0, onTime: 0, deliveredVolume: 0, shipmentCost: 0 };
   state.shipmentsByDay = [];
   state.stockoutEvents = [];
   state.nodes.forEach((node) => {
@@ -897,9 +1047,10 @@ function resetSimulation() {
 
 function serializeGraph() {
   return {
-    version: 1,
+    version: 2,
     day: state.day,
     globalPythonCode: state.globalPythonCode,
+    ui: structuredClone(state.ui),
     nodes: state.nodes.map((node) => {
       const schemaKeys = NODE_SCHEMAS[node.type].fields.map((f) => f.key);
       const config = schemaKeys.reduce((acc, key) => {
@@ -908,7 +1059,16 @@ function serializeGraph() {
       }, {});
       return { id: node.id, type: node.type, position: { x: node.x, y: node.y }, config };
     }),
-    links: state.links.map((l) => ({ id: l.id, from: l.from, to: l.to })),
+    links: state.links.map((l) => ({
+      id: l.id,
+      from: l.from,
+      to: l.to,
+      materialName: l.materialName,
+      transportDelayDays: l.transportDelayDays,
+      maxDailyCapacity: l.maxDailyCapacity,
+      priority: l.priority,
+      costPerShipment: l.costPerShipment,
+    })),
   };
 }
 
@@ -1138,7 +1298,13 @@ function duplicateSelected() {
   });
 
   state.links.filter((link) => cloneMap.has(link.from) && cloneMap.has(link.to)).forEach((link) => {
-    state.links.push({ id: `link-${state.linkCounter++}`, from: cloneMap.get(link.from), to: cloneMap.get(link.to) });
+    state.links.push({
+      ...structuredClone(link),
+      id: `link-${state.linkCounter++}`,
+      from: cloneMap.get(link.from),
+      to: cloneMap.get(link.to),
+      validationErrors: {},
+    });
   });
 
   validateAll();
@@ -1340,14 +1506,39 @@ globalPythonCodeEl.addEventListener('input', (e) => {
   state.globalPythonCode = e.target.value;
 });
 state.globalPythonCode = globalPythonCodeEl.value;
+if (showLinkLabelsInput) {
+  showLinkLabelsInput.checked = state.ui.showLinkLabels;
+  showLinkLabelsInput.addEventListener('change', (e) => {
+    state.ui.showLinkLabels = e.target.checked;
+    drawLinks();
+  });
+}
+if (allowWarehouseToWarehouseInput) {
+  allowWarehouseToWarehouseInput.checked = state.ui.allowWarehouseToWarehouse;
+  allowWarehouseToWarehouseInput.addEventListener('change', (e) => {
+    state.ui.allowWarehouseToWarehouse = e.target.checked;
+    validateAll();
+    drawLinks();
+    renderSelection();
+  });
+}
+if (allowPlantOutboundInput) {
+  allowPlantOutboundInput.checked = state.ui.allowPlantOutbound;
+  allowPlantOutboundInput.addEventListener('change', (e) => {
+    state.ui.allowPlantOutbound = e.target.checked;
+    validateAll();
+    drawLinks();
+    renderSelection();
+  });
+}
 
 addNode('supplier', 80, 90);
 addNode('warehouse', 430, 120);
 addNode('plant', 800, 150);
 addNode('analytics', 1070, 120);
-state.links.push({ id: `link-${state.linkCounter++}`, from: state.nodes[0].id, to: state.nodes[1].id });
-state.links.push({ id: `link-${state.linkCounter++}`, from: state.nodes[1].id, to: state.nodes[2].id });
-state.links.push({ id: `link-${state.linkCounter++}`, from: state.nodes[2].id, to: state.nodes[3].id });
+state.links.push({ id: `link-${state.linkCounter++}`, from: state.nodes[0].id, to: state.nodes[1].id, ...createLinkData(), validationErrors: {} });
+state.links.push({ id: `link-${state.linkCounter++}`, from: state.nodes[1].id, to: state.nodes[2].id, ...createLinkData(), validationErrors: {} });
+state.links.push({ id: `link-${state.linkCounter++}`, from: state.nodes[2].id, to: state.nodes[3].id, ...createLinkData(), validationErrors: {} });
 validateAll();
 initializeSimulationTracking();
 fitToGraph();
