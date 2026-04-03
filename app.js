@@ -120,6 +120,24 @@ const NODE_SCHEMAS = {
   },
 };
 const CORE_NODE_TYPES = Object.keys(NODE_SCHEMAS);
+const CORE_NODE_PACKAGE_ENTRIES = CORE_NODE_TYPES.map((type) => ({
+  type,
+  label: NODE_SCHEMAS[type].label,
+  description: 'Built-in node',
+  enabled: true,
+  source: 'core',
+  folder: 'nodes',
+}));
+
+function createDefaultNodePackage() {
+  return {
+    name: 'SCFL-node',
+    customNodes: [],
+    folders: {
+      nodes: structuredClone(CORE_NODE_PACKAGE_ENTRIES),
+    },
+  };
+}
 
 const state = {
   nodes: [],
@@ -184,8 +202,7 @@ const state = {
   contextCreateAt: null,
   clipboard: null,
   nodePackage: {
-    name: 'SCFL-node',
-    customNodes: [],
+    ...createDefaultNodePackage(),
   },
 };
 
@@ -270,6 +287,20 @@ function getNodeSchema(type) {
 function getCreatableNodeTypes() {
   const customEnabled = state.nodePackage.customNodes.filter((node) => node.enabled).map((node) => node.type);
   return [...CORE_NODE_TYPES, ...customEnabled];
+}
+
+function syncNodePackageFolders() {
+  const customEntries = state.nodePackage.customNodes.map((node) => ({
+    type: node.type,
+    label: node.schema.label,
+    description: node.description || 'Custom node',
+    enabled: node.enabled !== false,
+    source: 'custom',
+    folder: 'nodes',
+  }));
+  state.nodePackage.folders = {
+    nodes: [...CORE_NODE_PACKAGE_ENTRIES, ...customEntries],
+  };
 }
 
 function refreshNodeCreationActions() {
@@ -1606,6 +1637,24 @@ function migrateScenario(rawScenario) {
   migrated.nodePackage = migrated.nodePackage ?? { name: 'SCFL-node', customNodes: [] };
   migrated.nodePackage.name = 'SCFL-node';
   migrated.nodePackage.customNodes = Array.isArray(migrated.nodePackage.customNodes) ? migrated.nodePackage.customNodes : [];
+  const folderNodes = migrated.nodePackage?.folders?.nodes;
+  if (Array.isArray(folderNodes) && folderNodes.length) {
+    const existingByType = new Set(migrated.nodePackage.customNodes.map((node) => node.type));
+    folderNodes.forEach((node, idx) => {
+      if (!node || typeof node !== 'object') return;
+      const type = String(node.type ?? '').toLowerCase();
+      if (!type || CORE_NODE_TYPES.includes(type) || existingByType.has(type)) return;
+      try {
+        const normalized = normalizeCustomNodeDefinition(node, idx + 1);
+        normalized.enabled = node.enabled !== false;
+        migrated.nodePackage.customNodes.push(normalized);
+        existingByType.add(normalized.type);
+      } catch (error) {
+        console.warn('Skipping invalid nodes/ folder entry during migration', error);
+      }
+    });
+  }
+  migrated.nodePackage.folders = { nodes: structuredClone(CORE_NODE_PACKAGE_ENTRIES) };
 
   migrated.version = SCENARIO_VERSION;
   return migrated;
@@ -1647,25 +1696,30 @@ function normalizeCustomNodeDefinition(rawNode, idx = 1) {
 
 function renderNodePackageList() {
   if (!nodePackageList) return;
-  const installed = state.nodePackage.customNodes;
+  const installed = state.nodePackage.folders?.nodes ?? [];
   if (!installed.length) {
-    nodePackageList.innerHTML = 'No community nodes installed.';
+    nodePackageList.innerHTML = 'No nodes found in package folder "nodes".';
     return;
   }
-  nodePackageList.innerHTML = installed.map((node) => `
+  nodePackageList.innerHTML = `
+    <div class="node-package-folder-title">nodes/</div>
+    ${installed.map((node) => `
     <div class="node-package-item">
       <div class="node-package-row">
         <div>
-          <strong>${node.schema.label}</strong>
+          <strong>${node.label}</strong>
           <small>${node.type} · ${node.description || 'No description'}</small>
         </div>
         <div class="node-package-actions">
-          <label><input type="checkbox" data-custom-node-toggle="${node.type}" ${node.enabled ? 'checked' : ''} /> enabled</label>
-          <button class="ghost small" data-custom-node-remove="${node.type}">Remove</button>
+          ${node.source === 'custom'
+            ? `<label><input type="checkbox" data-custom-node-toggle="${node.type}" ${node.enabled ? 'checked' : ''} /> enabled</label>
+               <button class="ghost small" data-custom-node-remove="${node.type}">Remove</button>`
+            : '<small>core</small>'}
         </div>
       </div>
     </div>
-  `).join('');
+  `).join('')}
+  `;
 
   nodePackageList.querySelectorAll('[data-custom-node-toggle]').forEach((input) => {
     input.addEventListener('change', (e) => {
@@ -1680,6 +1734,7 @@ function renderNodePackageList() {
     button.addEventListener('click', (e) => {
       const type = e.currentTarget.dataset.customNodeRemove;
       state.nodePackage.customNodes = state.nodePackage.customNodes.filter((node) => node.type !== type);
+      syncNodePackageFolders();
       refreshNodeCreationActions();
       renderNodePackageList();
       persistScenarioToLocalStorage();
@@ -1700,7 +1755,7 @@ function importScenarioObject(rawScenario, options = {}) {
   state.ui.allowPlantOutbound = Boolean(scenario.ui?.allowPlantOutbound);
   state.ui.showCreateToolbar = scenario.ui?.showCreateToolbar !== false;
   state.ui.snapToGrid = Boolean(scenario.ui?.snapToGrid);
-  state.nodePackage = { name: 'SCFL-node', customNodes: [] };
+  state.nodePackage = createDefaultNodePackage();
   (scenario.nodePackage?.customNodes ?? []).forEach((rawNode, idx) => {
     try {
       const normalized = normalizeCustomNodeDefinition(rawNode, idx + 1);
@@ -1712,6 +1767,7 @@ function importScenarioObject(rawScenario, options = {}) {
       console.warn('Skipping invalid custom node definition', error);
     }
   });
+  syncNodePackageFolders();
   refreshNodeCreationActions();
   renderNodePackageList();
 
@@ -2689,14 +2745,21 @@ if (importNodePackageBtn && importNodePackageInput) {
     try {
       const text = await file.text();
       const parsed = JSON.parse(text);
-      const rawNodes = Array.isArray(parsed) ? parsed : (Array.isArray(parsed.nodes) ? parsed.nodes : []);
+      const rawNodes = Array.isArray(parsed)
+        ? parsed
+        : (Array.isArray(parsed.nodes)
+          ? parsed.nodes
+          : (Array.isArray(parsed?.folders?.nodes) ? parsed.folders.nodes : []));
       if (!rawNodes.length) throw new Error('JSON must contain a nodes array.');
       rawNodes.forEach((rawNode, idx) => {
+        const rawType = String(rawNode?.type ?? '').toLowerCase();
+        if (CORE_NODE_TYPES.includes(rawType)) return;
         const normalized = normalizeCustomNodeDefinition(rawNode, idx + 1);
         const existingIdx = state.nodePackage.customNodes.findIndex((node) => node.type === normalized.type);
         if (existingIdx >= 0) state.nodePackage.customNodes[existingIdx] = normalized;
         else state.nodePackage.customNodes.push(normalized);
       });
+      syncNodePackageFolders();
       refreshNodeCreationActions();
       renderNodePackageList();
       persistScenarioToLocalStorage();
@@ -2711,6 +2774,7 @@ if (importNodePackageBtn && importNodePackageInput) {
 }
 if (exportNodePackageBtn) {
   exportNodePackageBtn.addEventListener('click', () => {
+    syncNodePackageFolders();
     const payload = JSON.stringify(state.nodePackage, null, 2);
     const blob = new Blob([payload], { type: 'application/json' });
     const href = URL.createObjectURL(blob);
@@ -2730,6 +2794,7 @@ globalPythonCodeEl.addEventListener('input', (e) => {
 });
 state.globalPythonCode = globalPythonCodeEl.value;
 setSnapToGrid(state.ui.snapToGrid);
+syncNodePackageFolders();
 renderNodePackageList();
 if (showLinkLabelsInput) {
   showLinkLabelsInput.checked = state.ui.showLinkLabels;
