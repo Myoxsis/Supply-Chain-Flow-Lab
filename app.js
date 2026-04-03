@@ -51,7 +51,7 @@ const MIN_ZOOM = 0.35;
 const MAX_ZOOM = 2.5;
 const GRID_SIZE = 24;
 const SCENARIO_STORAGE_KEY = 'supply-chain-flow-lab:scenario';
-const SCENARIO_VERSION = 4;
+const SCENARIO_VERSION = 5;
 
 const NODE_SCHEMAS = {
   supplier: {
@@ -62,6 +62,7 @@ const NODE_SCHEMAS = {
       { key: 'deliveryQuantity', label: 'Delivery quantity', type: 'int', required: true, min: 1, step: 1, defaultValue: 120 },
       { key: 'leadTimeDays', label: 'Lead time (days)', type: 'int', required: true, min: 0, step: 1, defaultValue: 1 },
       { key: 'initialInventory', label: 'Initial inventory (optional)', type: 'int', required: false, min: 0, step: 1, defaultValue: null },
+      { key: 'shipmentCost', label: 'Shipment cost (optional)', type: 'number', required: false, min: 0, step: 0.01, defaultValue: null },
     ],
   },
   warehouse: {
@@ -74,6 +75,8 @@ const NODE_SCHEMAS = {
       { key: 'storageCapacity', label: 'Storage capacity', type: 'int', required: true, min: 1, step: 1, defaultValue: 600 },
       { key: 'initialInventory', label: 'Initial inventory', type: 'int', required: true, min: 0, step: 1, defaultValue: 120 },
       { key: 'reorderPoint', label: 'Reorder point (optional)', type: 'int', required: false, min: 0, step: 1, defaultValue: null },
+      { key: 'handlingCostPerUnit', label: 'Handling cost / unit (optional)', type: 'number', required: false, min: 0, step: 0.01, defaultValue: null },
+      { key: 'storageCostPerUnitPerDay', label: 'Storage cost / unit / day (optional)', type: 'number', required: false, min: 0, step: 0.01, defaultValue: null },
     ],
   },
   plant: {
@@ -83,6 +86,7 @@ const NODE_SCHEMAS = {
       { key: 'consumptionRatePerDay', label: 'Consumption rate / day', type: 'int', required: true, min: 0, step: 1, defaultValue: 20 },
       { key: 'initialInventory', label: 'Initial inventory', type: 'int', required: true, min: 0, step: 1, defaultValue: 100 },
       { key: 'safetyStock', label: 'Safety stock (optional)', type: 'int', required: false, min: 0, step: 1, defaultValue: null },
+      { key: 'stockoutPenaltyPerUnit', label: 'Stockout penalty / unit (optional)', type: 'number', required: false, min: 0, step: 0.01, defaultValue: null },
     ],
   },
   analytics: {
@@ -102,6 +106,14 @@ const NODE_SCHEMAS = {
           { value: 'avg_queue_time', label: 'Avg warehouse queue time (days)' },
           { value: 'avg_fulfillment_delay', label: 'Avg fulfillment delay (days)' },
           { value: 'total_shipped', label: 'Total shipped volume' },
+          { value: 'total_cost', label: 'Total cost' },
+          { value: 'transport_cost', label: 'Transport cost' },
+          { value: 'supplier_shipment_cost', label: 'Supplier shipment cost' },
+          { value: 'warehouse_handling_cost', label: 'Warehouse handling cost' },
+          { value: 'warehouse_storage_cost', label: 'Warehouse storage cost' },
+          { value: 'stockout_penalty_cost', label: 'Plant stockout penalty cost' },
+          { value: 'node_total_cost', label: 'Connected node total cost' },
+          { value: 'node_plant_served_cost', label: 'Connected plant served cost' },
           { value: 'shipments_today', label: 'Shipments today' },
           { value: 'node_inventory', label: 'Connected node inventory' },
           { value: 'node_shipped', label: 'Connected node shipped' },
@@ -133,6 +145,7 @@ const state = {
   },
   shipmentsByDay: [],
   stockoutEvents: [],
+  finance: createFinanceState(),
   analyticsNodeId: null,
   kpis: {
     stockoutCount: 0,
@@ -143,6 +156,9 @@ const state = {
     averageFulfillmentDelayDays: 0,
     totalShippedVolume: 0,
     totalShipmentCost: 0,
+    totalCost: 0,
+    costBreakdown: createCostBreakdown(),
+    costPerPlantServed: {},
   },
   day: 0,
   drag: null,
@@ -178,6 +194,33 @@ const state = {
   contextCreateAt: null,
   clipboard: null,
 };
+
+const COST_CATEGORY_KEYS = {
+  supplierShipment: 'supplierShipment',
+  warehouseHandling: 'warehouseHandling',
+  warehouseStorage: 'warehouseStorage',
+  transport: 'transport',
+  plantStockoutPenalty: 'plantStockoutPenalty',
+};
+
+function createCostBreakdown() {
+  return {
+    [COST_CATEGORY_KEYS.supplierShipment]: 0,
+    [COST_CATEGORY_KEYS.warehouseHandling]: 0,
+    [COST_CATEGORY_KEYS.warehouseStorage]: 0,
+    [COST_CATEGORY_KEYS.transport]: 0,
+    [COST_CATEGORY_KEYS.plantStockoutPenalty]: 0,
+  };
+}
+
+function createFinanceState() {
+  return {
+    totalCost: 0,
+    costBreakdown: createCostBreakdown(),
+    costByNode: {},
+    costPerPlantServed: {},
+  };
+}
 
 const LINK_SCHEMA = [
   { key: 'materialName', label: 'Material name', type: 'string', required: true, defaultValue: 'Raw material' },
@@ -418,6 +461,9 @@ function bindFieldEvents(body, node) {
       if (fieldSchema?.type === 'int') {
         const trimmed = raw.trim();
         value = trimmed === '' ? null : Number(trimmed);
+      } else if (fieldSchema?.type === 'number') {
+        const trimmed = raw.trim();
+        value = trimmed === '' ? null : Number(trimmed);
       }
       node[field] = value;
       node.initial[field] = value;
@@ -463,7 +509,7 @@ function validateNode(node) {
       return;
     }
 
-    if (!Number.isInteger(value)) {
+    if (field.type === 'int' && !Number.isInteger(value)) {
       errors[field.key] = `${field.label} must be an integer.`;
       return;
     }
@@ -995,6 +1041,58 @@ function stepSimulation() {
   runOneSimulationDay();
 }
 
+function getPlantCostBucket(plantId) {
+  if (!plantId) return null;
+  const plant = getNode(plantId);
+  if (!plant || plant.type !== 'plant') return null;
+  if (!state.finance.costPerPlantServed[plantId]) {
+    state.finance.costPerPlantServed[plantId] = {
+      plantId,
+      plantName: plant.name,
+      totalCost: 0,
+      costBreakdown: createCostBreakdown(),
+    };
+  }
+  return state.finance.costPerPlantServed[plantId];
+}
+
+function getNodeCostBucket(nodeId) {
+  if (!nodeId) return null;
+  const node = getNode(nodeId);
+  if (!node) return null;
+  if (!state.finance.costByNode[nodeId]) {
+    state.finance.costByNode[nodeId] = {
+      nodeId,
+      nodeName: node.name,
+      nodeType: node.type,
+      totalCost: 0,
+      costBreakdown: createCostBreakdown(),
+    };
+  }
+  return state.finance.costByNode[nodeId];
+}
+
+function addCost(categoryKey, amount, options = {}) {
+  const numeric = Number(amount);
+  if (!Number.isFinite(numeric) || numeric <= 0) return;
+  if (!(categoryKey in state.finance.costBreakdown)) return;
+
+  state.finance.totalCost += numeric;
+  state.finance.costBreakdown[categoryKey] += numeric;
+
+  const nodeBucket = getNodeCostBucket(options.nodeId ?? null);
+  if (nodeBucket) {
+    nodeBucket.totalCost += numeric;
+    nodeBucket.costBreakdown[categoryKey] += numeric;
+  }
+
+  const plantBucket = getPlantCostBucket(options.plantId ?? null);
+  if (plantBucket) {
+    plantBucket.totalCost += numeric;
+    plantBucket.costBreakdown[categoryKey] += numeric;
+  }
+}
+
 function simulateDay() {
   state.day += 1;
   state.shipmentsByDay.push({ day: state.day, count: 0, volume: 0 });
@@ -1002,8 +1100,18 @@ function simulateDay() {
   suppliersShip();
   warehousesDispatch();
   plantsConsume();
+  applyWarehouseStorageCosts();
   recordDailyHistory();
   computeKpis();
+}
+
+function applyWarehouseStorageCosts() {
+  state.nodes.filter((node) => node.type === 'warehouse').forEach((warehouse) => {
+    const storageRate = Number(warehouse.storageCostPerUnitPerDay ?? 0);
+    if (!Number.isFinite(storageRate) || storageRate <= 0) return;
+    if (!Number.isFinite(warehouse.inventory) || warehouse.inventory <= 0) return;
+    addCost(COST_CATEGORY_KEYS.warehouseStorage, warehouse.inventory * storageRate, { nodeId: warehouse.id });
+  });
 }
 
 function processArrivals() {
@@ -1049,7 +1157,14 @@ function suppliersShip() {
       const qtyCap = Math.min(supplier.deliveryQuantity, linkCapacity);
       const qty = Number.isFinite(supplier.inventory) ? Math.min(qtyCap, supplier.inventory) : qtyCap;
       if (qty <= 0) return;
-      queueShipment(supplier, target, link, qty, supplier.leadTimeDays + link.transportDelayDays);
+      queueShipment(
+        supplier,
+        target,
+        link,
+        qty,
+        supplier.leadTimeDays + link.transportDelayDays,
+        { plantId: target.type === 'plant' ? target.id : null },
+      );
       if (Number.isFinite(supplier.inventory)) supplier.inventory -= qty;
       supplier.shipped += qty;
       shippedToday += qty;
@@ -1166,7 +1281,14 @@ function dispatchPreparedShipments(warehouse) {
       const dispatchQty = Math.min(order.qty, linkCapacity);
       if (dispatchQty > 0) {
         warehouse.shipped += dispatchQty;
-        queueShipment(warehouse, plant, link, dispatchQty, warehouse.deliveryToPlantDays + link.transportDelayDays);
+        queueShipment(
+          warehouse,
+          plant,
+          link,
+          dispatchQty,
+          warehouse.deliveryToPlantDays + link.transportDelayDays,
+          { plantId: plant.id },
+        );
         linkCapacity -= dispatchQty;
         const fulfillmentDelay = Math.max(0, state.day - order.queuedDay);
         state.deliveryStats.fulfilledRequests += 1;
@@ -1208,6 +1330,8 @@ function plantsConsume() {
     const shortfall = Math.abs(plant.inventory);
     plant.inventory = 0;
     plant.stockouts += 1;
+    const stockoutPenalty = Number(plant.stockoutPenaltyPerUnit ?? 0) * shortfall;
+    addCost(COST_CATEGORY_KEYS.plantStockoutPenalty, stockoutPenalty, { nodeId: plant.id, plantId: plant.id });
     state.stockoutEvents.push({ day: state.day, nodeId: plant.id, shortfall });
     log(`${plant.name} stockout (${shortfall} units short)`);
   });
@@ -1285,6 +1409,17 @@ function computeKpis() {
     averageFulfillmentDelayDays: Number(averageFulfillmentDelayDays.toFixed(2)),
     totalShippedVolume: state.nodes.reduce((sum, node) => sum + node.shipped, 0),
     totalShipmentCost: Number(state.deliveryStats.shipmentCost.toFixed(2)),
+    totalCost: Number(state.finance.totalCost.toFixed(2)),
+    costBreakdown: Object.fromEntries(Object.entries(state.finance.costBreakdown).map(([key, value]) => [key, Number(value.toFixed(2))])),
+    costPerPlantServed: Object.fromEntries(
+      Object.entries(state.finance.costPerPlantServed).map(([plantId, bucket]) => [plantId, {
+        plantName: getNode(plantId)?.name ?? bucket.plantName,
+        totalCost: Number(bucket.totalCost.toFixed(2)),
+        costBreakdown: Object.fromEntries(
+          Object.entries(bucket.costBreakdown).map(([key, value]) => [key, Number(value.toFixed(2))]),
+        ),
+      }]),
+    ),
   };
 }
 
@@ -1334,13 +1469,38 @@ function buildSimulationOutput() {
     inventoryTimeSeriesByNode: structuredClone(state.inventoryHistoryByNode),
     shipmentsInTransitHistory: structuredClone(state.transitHistory),
     kpiSummary: structuredClone(state.kpis),
+    costSummary: {
+      totalCost: state.kpis.totalCost,
+      costBreakdown: structuredClone(state.kpis.costBreakdown),
+      costPerPlantServed: structuredClone(state.kpis.costPerPlantServed),
+      costByNode: Object.fromEntries(
+        Object.entries(state.finance.costByNode).map(([nodeId, bucket]) => [nodeId, {
+          nodeName: getNode(nodeId)?.name ?? bucket.nodeName,
+          nodeType: getNode(nodeId)?.type ?? bucket.nodeType,
+          totalCost: Number(bucket.totalCost.toFixed(2)),
+          costBreakdown: Object.fromEntries(
+            Object.entries(bucket.costBreakdown).map(([key, value]) => [key, Number(value.toFixed(2))]),
+          ),
+        }]),
+      ),
+    },
   };
 }
 
-function queueShipment(from, to, link, qty, leadTime) {
+function queueShipment(from, to, link, qty, leadTime, options = {}) {
   state.deliveryStats.dispatched += 1;
   const shipmentCost = link.costPerShipment == null ? 0 : Number(link.costPerShipment);
   if (Number.isFinite(shipmentCost)) state.deliveryStats.shipmentCost += shipmentCost;
+  addCost(COST_CATEGORY_KEYS.transport, shipmentCost, { nodeId: from.id, plantId: options.plantId ?? null });
+
+  const supplierShipmentCost = from.type === 'supplier' ? Number(from.shipmentCost ?? 0) : 0;
+  addCost(COST_CATEGORY_KEYS.supplierShipment, supplierShipmentCost, { nodeId: from.id, plantId: options.plantId ?? null });
+
+  if (from.type === 'warehouse') {
+    const handlingCostPerUnit = Number(from.handlingCostPerUnit ?? 0);
+    addCost(COST_CATEGORY_KEYS.warehouseHandling, qty * handlingCostPerUnit, { nodeId: from.id, plantId: options.plantId ?? null });
+  }
+
   const dayBucket = state.shipmentsByDay[state.shipmentsByDay.length - 1];
   if (dayBucket) {
     dayBucket.count += 1;
@@ -1383,6 +1543,7 @@ function initializeSimulationTracking() {
     fulfilledRequests: 0,
     fulfillmentDelayTotal: 0,
   };
+  state.finance = createFinanceState();
   state.shipmentsByDay = [];
   state.stockoutEvents = [];
   state.nodes.forEach((node) => {
@@ -1503,6 +1664,30 @@ function migrateScenario(rawScenario) {
           preparationCapacityPerDay: node.config?.preparationCapacityPerDay ?? null,
         },
       };
+    });
+  }
+
+  if (version < 5) {
+    migrated.nodes = (migrated.nodes ?? []).map((node) => {
+      if (!node || typeof node !== 'object') return node;
+      const config = node.config ?? {};
+      if (node.type === 'supplier') {
+        return { ...node, config: { ...config, shipmentCost: config.shipmentCost ?? null } };
+      }
+      if (node.type === 'warehouse') {
+        return {
+          ...node,
+          config: {
+            ...config,
+            handlingCostPerUnit: config.handlingCostPerUnit ?? null,
+            storageCostPerUnitPerDay: config.storageCostPerUnitPerDay ?? null,
+          },
+        };
+      }
+      if (node.type === 'plant') {
+        return { ...node, config: { ...config, stockoutPenaltyPerUnit: config.stockoutPenaltyPerUnit ?? null } };
+      }
+      return node;
     });
   }
 
@@ -1710,6 +1895,26 @@ function getPrimaryAnalyticsSource(analyticsNode) {
   return inputLink ? getNode(inputLink.from) : null;
 }
 
+function getSourceNodeCost(sourceNode) {
+  if (!sourceNode) return null;
+  return state.finance.costByNode[sourceNode.id]?.totalCost ?? 0;
+}
+
+function getSourcePlantServedCost(sourceNode) {
+  if (!sourceNode) return null;
+  if (sourceNode.type === 'plant') return state.finance.costPerPlantServed[sourceNode.id]?.totalCost ?? 0;
+  if (sourceNode.type === 'warehouse') {
+    const outboundPlantIds = state.links
+      .filter((link) => link.from === sourceNode.id)
+      .map((link) => getNode(link.to))
+      .filter((node) => node?.type === 'plant')
+      .map((node) => node.id);
+    if (!outboundPlantIds.length) return 0;
+    return outboundPlantIds.reduce((sum, plantId) => sum + (state.finance.costPerPlantServed[plantId]?.totalCost ?? 0), 0);
+  }
+  return null;
+}
+
 function readMetricValue(analyticsNode) {
   const source = getPrimaryAnalyticsSource(analyticsNode);
   switch (analyticsNode.metric) {
@@ -1727,6 +1932,22 @@ function readMetricValue(analyticsNode) {
       return `${state.kpis.averageFulfillmentDelayDays.toFixed(1)} d`;
     case 'total_shipped':
       return state.kpis.totalShippedVolume;
+    case 'total_cost':
+      return formatLinkCost(state.kpis.totalCost);
+    case 'transport_cost':
+      return formatLinkCost(state.kpis.costBreakdown.transport);
+    case 'supplier_shipment_cost':
+      return formatLinkCost(state.kpis.costBreakdown.supplierShipment);
+    case 'warehouse_handling_cost':
+      return formatLinkCost(state.kpis.costBreakdown.warehouseHandling);
+    case 'warehouse_storage_cost':
+      return formatLinkCost(state.kpis.costBreakdown.warehouseStorage);
+    case 'stockout_penalty_cost':
+      return formatLinkCost(state.kpis.costBreakdown.plantStockoutPenalty);
+    case 'node_total_cost':
+      return source ? formatLinkCost(getSourceNodeCost(source)) : '—';
+    case 'node_plant_served_cost':
+      return source ? formatLinkCost(getSourcePlantServedCost(source)) : '—';
     case 'shipments_today':
       return state.shipmentsByDay.at(-1)?.count ?? 0;
     case 'node_inventory':
@@ -1757,6 +1978,22 @@ function readMetricNumericValue(analyticsNode) {
       return state.kpis.averageFulfillmentDelayDays;
     case 'total_shipped':
       return state.kpis.totalShippedVolume;
+    case 'total_cost':
+      return state.kpis.totalCost;
+    case 'transport_cost':
+      return state.kpis.costBreakdown.transport;
+    case 'supplier_shipment_cost':
+      return state.kpis.costBreakdown.supplierShipment;
+    case 'warehouse_handling_cost':
+      return state.kpis.costBreakdown.warehouseHandling;
+    case 'warehouse_storage_cost':
+      return state.kpis.costBreakdown.warehouseStorage;
+    case 'stockout_penalty_cost':
+      return state.kpis.costBreakdown.plantStockoutPenalty;
+    case 'node_total_cost':
+      return source ? getSourceNodeCost(source) : null;
+    case 'node_plant_served_cost':
+      return source ? getSourcePlantServedCost(source) : null;
     case 'shipments_today':
       return state.shipmentsByDay.at(-1)?.count ?? 0;
     case 'node_inventory':
