@@ -14,6 +14,12 @@ const globalPythonCodeEl = document.getElementById('globalPythonCode');
 const showLinkLabelsInput = document.getElementById('showLinkLabels');
 const allowWarehouseToWarehouseInput = document.getElementById('allowWarehouseToWarehouse');
 const allowPlantOutboundInput = document.getElementById('allowPlantOutbound');
+const scenarioPresetSelect = document.getElementById('scenarioPreset');
+const loadPresetBtn = document.getElementById('loadPresetBtn');
+const resetScenarioBtn = document.getElementById('resetScenarioBtn');
+const exportScenarioBtn = document.getElementById('exportScenarioBtn');
+const importScenarioBtn = document.getElementById('importScenarioBtn');
+const importScenarioInput = document.getElementById('importScenarioInput');
 const tempLinkPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
 tempLinkPath.setAttribute('class', 'link-path temp-link hidden');
 linksSvg.appendChild(tempLinkPath);
@@ -24,6 +30,8 @@ workspace.appendChild(selectionBox);
 
 const MIN_ZOOM = 0.35;
 const MAX_ZOOM = 2.5;
+const SCENARIO_STORAGE_KEY = 'supply-chain-flow-lab:scenario';
+const SCENARIO_VERSION = 3;
 
 const NODE_SCHEMAS = {
   supplier: {
@@ -131,6 +139,61 @@ const LINK_SCHEMA = [
   { key: 'priority', label: 'Priority', type: 'int', required: true, min: 1, step: 1, defaultValue: 1 },
   { key: 'costPerShipment', label: 'Cost per shipment (optional)', type: 'number', required: false, min: 0, step: 0.01, defaultValue: null },
 ];
+
+const BUILT_IN_SCENARIOS = {
+  blank: {
+    version: SCENARIO_VERSION,
+    day: 0,
+    globalPythonCode: '',
+    ui: { showLinkLabels: false, allowWarehouseToWarehouse: false, allowPlantOutbound: false },
+    nodes: [],
+    links: [],
+  },
+  demo: {
+    version: SCENARIO_VERSION,
+    day: 0,
+    globalPythonCode: '',
+    ui: { showLinkLabels: true, allowWarehouseToWarehouse: false, allowPlantOutbound: false },
+    nodes: [
+      {
+        id: 'node-1',
+        type: 'supplier',
+        position: { x: 90, y: 80 },
+        config: { name: 'Supplier North', deliveryFrequencyDays: 2, deliveryQuantity: 140, leadTimeDays: 1, initialInventory: null },
+      },
+      {
+        id: 'node-2',
+        type: 'supplier',
+        position: { x: 90, y: 260 },
+        config: { name: 'Supplier South', deliveryFrequencyDays: 3, deliveryQuantity: 110, leadTimeDays: 2, initialInventory: null },
+      },
+      {
+        id: 'node-3',
+        type: 'warehouse',
+        position: { x: 430, y: 170 },
+        config: { name: 'Central Warehouse', preparationTimeDays: 1, deliveryToPlantDays: 2, storageCapacity: 900, initialInventory: 220, reorderPoint: 300 },
+      },
+      {
+        id: 'node-4',
+        type: 'plant',
+        position: { x: 790, y: 100 },
+        config: { name: 'Plant Alpha', consumptionRatePerDay: 35, initialInventory: 140, safetyStock: 70 },
+      },
+      {
+        id: 'node-5',
+        type: 'plant',
+        position: { x: 790, y: 290 },
+        config: { name: 'Plant Beta', consumptionRatePerDay: 28, initialInventory: 120, safetyStock: 60 },
+      },
+    ],
+    links: [
+      { id: 'link-1', from: 'node-1', to: 'node-3', materialName: 'Alloy A', transportDelayDays: 1, maxDailyCapacity: 160, priority: 1, costPerShipment: 40 },
+      { id: 'link-2', from: 'node-2', to: 'node-3', materialName: 'Polymer B', transportDelayDays: 2, maxDailyCapacity: 130, priority: 1, costPerShipment: 45 },
+      { id: 'link-3', from: 'node-3', to: 'node-4', materialName: 'Component Kit', transportDelayDays: 2, maxDailyCapacity: 120, priority: 1, costPerShipment: 65 },
+      { id: 'link-4', from: 'node-3', to: 'node-5', materialName: 'Component Kit', transportDelayDays: 2, maxDailyCapacity: 120, priority: 1, costPerShipment: 65 },
+    ],
+  },
+};
 
 function createNodeData(type) {
   const schema = NODE_SCHEMAS[type];
@@ -1045,9 +1108,163 @@ function resetSimulation() {
   renderSelection();
 }
 
+function clearGraph() {
+  state.nodes = [];
+  state.links = [];
+  state.shipments = [];
+  state.selectedNodeIds = [];
+  state.selectedLinkIds = [];
+  state.analyticsNodeId = null;
+  state.graphErrors = [];
+  workspace.querySelectorAll('.node-card').forEach((el) => el.remove());
+  drawLinks();
+  renderSelection();
+  renderAnalyticsNodeOptions();
+}
+
+function normalizeNodeConfig(type, config = {}, sequence = 1) {
+  const defaults = createNodeData(type);
+  const normalized = {};
+  NODE_SCHEMAS[type].fields.forEach((field) => {
+    const raw = config[field.key];
+    if (field.type === 'string' || field.type === 'text' || field.type === 'select') {
+      normalized[field.key] = raw == null ? defaults[field.key] : String(raw);
+      return;
+    }
+    if (raw == null || raw === '') {
+      normalized[field.key] = field.required ? defaults[field.key] : null;
+      return;
+    }
+    const numeric = Number(raw);
+    normalized[field.key] = Number.isFinite(numeric) ? numeric : (field.required ? defaults[field.key] : null);
+  });
+  if (!normalized.name) normalized.name = `${NODE_SCHEMAS[type].label} ${sequence}`;
+  return normalized;
+}
+
+function migrateScenario(rawScenario) {
+  if (!rawScenario || typeof rawScenario !== 'object') {
+    throw new Error('Scenario must be a JSON object.');
+  }
+
+  const version = Number(rawScenario.version ?? 1);
+  if (!Number.isInteger(version) || version <= 0) {
+    throw new Error('Scenario version must be a positive integer.');
+  }
+  if (version > SCENARIO_VERSION) {
+    throw new Error(`Unsupported scenario version ${version}. This app supports up to version ${SCENARIO_VERSION}.`);
+  }
+
+  const migrated = structuredClone(rawScenario);
+
+  if (version < 2) {
+    migrated.globalPythonCode = migrated.globalPythonCode ?? '';
+    migrated.ui = migrated.ui ?? {};
+    migrated.links = (migrated.links ?? []).map((link) => ({ ...createLinkData(), ...link }));
+  }
+
+  if (version < 3) {
+    migrated.ui = {
+      showLinkLabels: Boolean(migrated.ui?.showLinkLabels),
+      allowWarehouseToWarehouse: Boolean(migrated.ui?.allowWarehouseToWarehouse),
+      allowPlantOutbound: Boolean(migrated.ui?.allowPlantOutbound),
+    };
+  }
+
+  migrated.version = SCENARIO_VERSION;
+  return migrated;
+}
+
+function importScenarioObject(rawScenario, options = {}) {
+  const scenario = migrateScenario(rawScenario);
+  const nodesInput = Array.isArray(scenario.nodes) ? scenario.nodes : [];
+  const linksInput = Array.isArray(scenario.links) ? scenario.links : [];
+
+  clearGraph();
+  state.day = Number.isInteger(scenario.day) && scenario.day >= 0 ? scenario.day : 0;
+  state.globalPythonCode = typeof scenario.globalPythonCode === 'string' ? scenario.globalPythonCode : '';
+  globalPythonCodeEl.value = state.globalPythonCode;
+  state.ui.showLinkLabels = Boolean(scenario.ui?.showLinkLabels);
+  state.ui.allowWarehouseToWarehouse = Boolean(scenario.ui?.allowWarehouseToWarehouse);
+  state.ui.allowPlantOutbound = Boolean(scenario.ui?.allowPlantOutbound);
+
+  nodesInput.forEach((rawNode, idx) => {
+    if (!rawNode || typeof rawNode !== 'object') return;
+    if (!NODE_SCHEMAS[rawNode.type]) return;
+    const config = normalizeNodeConfig(rawNode.type, rawNode.config, idx + 1);
+    const x = Number(rawNode.position?.x ?? 80 + idx * 40);
+    const y = Number(rawNode.position?.y ?? 80 + idx * 40);
+    const node = {
+      id: typeof rawNode.id === 'string' && rawNode.id ? rawNode.id : `node-${idx + 1}`,
+      type: rawNode.type,
+      x: Number.isFinite(x) ? x : 80 + idx * 40,
+      y: Number.isFinite(y) ? y : 80 + idx * 40,
+      z: state.zCounter++,
+      ...config,
+      inventory: resolveInitialInventory(rawNode.type, config),
+      received: 0,
+      shipped: 0,
+      stockouts: 0,
+      initial: structuredClone(config),
+      validationErrors: {},
+    };
+    state.nodes.push(node);
+    renderNode(node);
+  });
+
+  const nodeIds = new Set(state.nodes.map((n) => n.id));
+  linksInput.forEach((rawLink, idx) => {
+    if (!rawLink || typeof rawLink !== 'object') return;
+    if (!nodeIds.has(rawLink.from) || !nodeIds.has(rawLink.to)) return;
+    const defaults = createLinkData();
+    const transportDelayDays = Number(rawLink.transportDelayDays ?? defaults.transportDelayDays);
+    const maxDailyCapacity = Number(rawLink.maxDailyCapacity ?? defaults.maxDailyCapacity);
+    const priority = Number(rawLink.priority ?? defaults.priority);
+    const costPerShipment = rawLink.costPerShipment == null ? null : Number(rawLink.costPerShipment);
+    state.links.push({
+      id: typeof rawLink.id === 'string' && rawLink.id ? rawLink.id : `link-${idx + 1}`,
+      from: rawLink.from,
+      to: rawLink.to,
+      materialName: String(rawLink.materialName ?? defaults.materialName),
+      transportDelayDays: Number.isFinite(transportDelayDays) ? transportDelayDays : defaults.transportDelayDays,
+      maxDailyCapacity: Number.isFinite(maxDailyCapacity) ? maxDailyCapacity : defaults.maxDailyCapacity,
+      priority: Number.isFinite(priority) ? priority : defaults.priority,
+      costPerShipment: costPerShipment == null || Number.isFinite(costPerShipment) ? costPerShipment : null,
+      validationErrors: {},
+    });
+  });
+
+  const maxNodeCounter = state.nodes.reduce((max, node) => {
+    const parsed = Number.parseInt(String(node.id).replace('node-', ''), 10);
+    return Number.isInteger(parsed) ? Math.max(max, parsed) : max;
+  }, 0);
+  const maxLinkCounter = state.links.reduce((max, link) => {
+    const parsed = Number.parseInt(String(link.id).replace('link-', ''), 10);
+    return Number.isInteger(parsed) ? Math.max(max, parsed) : max;
+  }, 0);
+  state.nodeCounter = Math.max(1, maxNodeCounter + 1);
+  state.linkCounter = Math.max(1, maxLinkCounter + 1);
+
+  showLinkLabelsInput.checked = state.ui.showLinkLabels;
+  allowWarehouseToWarehouseInput.checked = state.ui.allowWarehouseToWarehouse;
+  allowPlantOutboundInput.checked = state.ui.allowPlantOutbound;
+
+  validateAll();
+  initializeSimulationTracking();
+  updateStats();
+  if (state.nodes.length) {
+    selectNodes([state.nodes[0].id]);
+    fitToGraph();
+  } else {
+    renderViewport();
+    renderAnalytics();
+  }
+  if (!options.silent) log(options.logMessage ?? 'Scenario loaded');
+}
+
 function serializeGraph() {
   return {
-    version: 2,
+    version: SCENARIO_VERSION,
     day: state.day,
     globalPythonCode: state.globalPythonCode,
     ui: structuredClone(state.ui),
@@ -1070,6 +1287,34 @@ function serializeGraph() {
       costPerShipment: l.costPerShipment,
     })),
   };
+}
+
+function persistScenarioToLocalStorage() {
+  try {
+    localStorage.setItem(SCENARIO_STORAGE_KEY, JSON.stringify(serializeGraph()));
+  } catch (error) {
+    console.warn('Failed to save scenario to localStorage', error);
+  }
+}
+
+function loadScenarioFromLocalStorage() {
+  const raw = localStorage.getItem(SCENARIO_STORAGE_KEY);
+  if (!raw) return false;
+  try {
+    importScenarioObject(JSON.parse(raw), { logMessage: 'Scenario restored from local storage' });
+    return true;
+  } catch (error) {
+    console.warn('Failed to restore scenario from localStorage', error);
+    log(`Could not restore saved scenario (${error.message}). Loading demo instead.`);
+    return false;
+  }
+}
+
+let autosaveHandle = null;
+function startScenarioAutosave() {
+  clearInterval(autosaveHandle);
+  autosaveHandle = setInterval(persistScenarioToLocalStorage, 1500);
+  window.addEventListener('beforeunload', persistScenarioToLocalStorage);
 }
 
 function updateStats() {
@@ -1493,6 +1738,53 @@ document.getElementById('stepBtn').addEventListener('click', stepSimulation);
 document.getElementById('playBtn').addEventListener('click', () => togglePlay(true));
 document.getElementById('pauseBtn').addEventListener('click', () => togglePlay(false));
 document.getElementById('resetBtn').addEventListener('click', resetSimulation);
+if (loadPresetBtn) {
+  loadPresetBtn.addEventListener('click', () => {
+    const preset = scenarioPresetSelect?.value ?? 'blank';
+    if (!BUILT_IN_SCENARIOS[preset]) return;
+    importScenarioObject(structuredClone(BUILT_IN_SCENARIOS[preset]), { logMessage: `${preset === 'demo' ? 'Demo' : 'Blank'} scenario loaded` });
+    persistScenarioToLocalStorage();
+  });
+}
+if (resetScenarioBtn) {
+  resetScenarioBtn.addEventListener('click', () => {
+    importScenarioObject(structuredClone(BUILT_IN_SCENARIOS.blank), { logMessage: 'Scenario reset to blank' });
+    persistScenarioToLocalStorage();
+  });
+}
+if (exportScenarioBtn) {
+  exportScenarioBtn.addEventListener('click', () => {
+    const payload = JSON.stringify(serializeGraph(), null, 2);
+    const blob = new Blob([payload], { type: 'application/json' });
+    const href = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = href;
+    anchor.download = `supply-chain-scenario-v${SCENARIO_VERSION}.json`;
+    document.body.appendChild(anchor);
+    anchor.click();
+    anchor.remove();
+    URL.revokeObjectURL(href);
+    log('Scenario exported to JSON');
+  });
+}
+if (importScenarioBtn && importScenarioInput) {
+  importScenarioBtn.addEventListener('click', () => importScenarioInput.click());
+  importScenarioInput.addEventListener('change', async (e) => {
+    const [file] = e.target.files ?? [];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      const parsed = JSON.parse(text);
+      importScenarioObject(parsed, { logMessage: `Scenario imported from ${file.name}` });
+      persistScenarioToLocalStorage();
+    } catch (error) {
+      log(`Import failed: ${error.message}`);
+      alert(`Could not import scenario. ${error.message}`);
+    } finally {
+      importScenarioInput.value = '';
+    }
+  });
+}
 document.getElementById('tickSpeed').addEventListener('change', () => { if (state.timer) togglePlay(true); });
 analyticsNodeSelect.addEventListener('change', (e) => {
   state.analyticsNodeId = e.target.value;
@@ -1504,6 +1796,7 @@ document.getElementById('clearLogBtn').addEventListener('click', () => {
 });
 globalPythonCodeEl.addEventListener('input', (e) => {
   state.globalPythonCode = e.target.value;
+  persistScenarioToLocalStorage();
 });
 state.globalPythonCode = globalPythonCodeEl.value;
 if (showLinkLabelsInput) {
@@ -1511,6 +1804,7 @@ if (showLinkLabelsInput) {
   showLinkLabelsInput.addEventListener('change', (e) => {
     state.ui.showLinkLabels = e.target.checked;
     drawLinks();
+    persistScenarioToLocalStorage();
   });
 }
 if (allowWarehouseToWarehouseInput) {
@@ -1520,6 +1814,7 @@ if (allowWarehouseToWarehouseInput) {
     validateAll();
     drawLinks();
     renderSelection();
+    persistScenarioToLocalStorage();
   });
 }
 if (allowPlantOutboundInput) {
@@ -1529,25 +1824,20 @@ if (allowPlantOutboundInput) {
     validateAll();
     drawLinks();
     renderSelection();
+    persistScenarioToLocalStorage();
   });
 }
-
-addNode('supplier', 80, 90);
-addNode('warehouse', 430, 120);
-addNode('plant', 800, 150);
-addNode('analytics', 1070, 120);
-state.links.push({ id: `link-${state.linkCounter++}`, from: state.nodes[0].id, to: state.nodes[1].id, ...createLinkData(), validationErrors: {} });
-state.links.push({ id: `link-${state.linkCounter++}`, from: state.nodes[1].id, to: state.nodes[2].id, ...createLinkData(), validationErrors: {} });
-state.links.push({ id: `link-${state.linkCounter++}`, from: state.nodes[2].id, to: state.nodes[3].id, ...createLinkData(), validationErrors: {} });
-validateAll();
-initializeSimulationTracking();
-fitToGraph();
-updateStats();
-selectNodes([state.nodes[0].id]);
-log('Starter scenario loaded');
+startScenarioAutosave();
+if (!loadScenarioFromLocalStorage()) {
+  importScenarioObject(structuredClone(BUILT_IN_SCENARIOS.demo), { logMessage: 'Built-in demo scenario loaded' });
+  persistScenarioToLocalStorage();
+}
 
 window.SupplyChainFlowLab = {
   serializeGraph,
+  importScenarioObject,
+  migrateScenario,
+  loadBuiltInScenario: (name) => importScenarioObject(structuredClone(BUILT_IN_SCENARIOS[name] ?? BUILT_IN_SCENARIOS.blank)),
   getState: () => structuredClone({ nodes: state.nodes, links: state.links, graphErrors: state.graphErrors, globalPythonCode: state.globalPythonCode }),
   stepSimulation,
   simulateDays,
