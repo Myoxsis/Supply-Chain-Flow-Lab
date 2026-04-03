@@ -50,7 +50,7 @@ const MIN_ZOOM = 0.35;
 const MAX_ZOOM = 2.5;
 const GRID_SIZE = 24;
 const SCENARIO_STORAGE_KEY = 'supply-chain-flow-lab:scenario';
-const SCENARIO_VERSION = 3;
+const SCENARIO_VERSION = 4;
 
 const NODE_SCHEMAS = {
   supplier: {
@@ -68,6 +68,7 @@ const NODE_SCHEMAS = {
     fields: [
       { key: 'name', label: 'Name', type: 'string', required: true, defaultValue: (i) => `Warehouse ${i}` },
       { key: 'preparationTimeDays', label: 'Preparation time (days)', type: 'int', required: true, min: 0, step: 1, defaultValue: 1 },
+      { key: 'preparationCapacityPerDay', label: 'Preparation capacity / day (optional)', type: 'int', required: false, min: 1, step: 1, defaultValue: null },
       { key: 'deliveryToPlantDays', label: 'Delivery to plant (days)', type: 'int', required: true, min: 0, step: 1, defaultValue: 2 },
       { key: 'storageCapacity', label: 'Storage capacity', type: 'int', required: true, min: 1, step: 1, defaultValue: 600 },
       { key: 'initialInventory', label: 'Initial inventory', type: 'int', required: true, min: 0, step: 1, defaultValue: 120 },
@@ -97,6 +98,8 @@ const NODE_SCHEMAS = {
           { value: 'avg_plant_inventory', label: 'Avg plant inventory' },
           { value: 'warehouse_utilization', label: 'Warehouse utilization %' },
           { value: 'on_time_rate', label: 'On-time delivery %' },
+          { value: 'avg_queue_time', label: 'Avg warehouse queue time (days)' },
+          { value: 'avg_fulfillment_delay', label: 'Avg fulfillment delay (days)' },
           { value: 'total_shipped', label: 'Total shipped volume' },
           { value: 'shipments_today', label: 'Shipments today' },
           { value: 'node_inventory', label: 'Connected node inventory' },
@@ -117,7 +120,16 @@ const state = {
   inventoryHistoryByNode: {},
   analyticsMetricHistoryByNode: {},
   transitHistory: [],
-  deliveryStats: { dispatched: 0, onTime: 0, deliveredVolume: 0, shipmentCost: 0 },
+  deliveryStats: {
+    dispatched: 0,
+    onTime: 0,
+    deliveredVolume: 0,
+    shipmentCost: 0,
+    queueEntries: 0,
+    queueDaysTotal: 0,
+    fulfilledRequests: 0,
+    fulfillmentDelayTotal: 0,
+  },
   shipmentsByDay: [],
   stockoutEvents: [],
   analyticsNodeId: null,
@@ -126,6 +138,8 @@ const state = {
     averagePlantInventory: 0,
     warehouseUtilization: 0,
     onTimeDeliveries: { onTime: 0, total: 0, rate: 0 },
+    averageQueueTimeDays: 0,
+    averageFulfillmentDelayDays: 0,
     totalShippedVolume: 0,
     totalShipmentCost: 0,
   },
@@ -201,7 +215,7 @@ const BUILT_IN_SCENARIOS = {
         id: 'node-3',
         type: 'warehouse',
         position: { x: 430, y: 170 },
-        config: { name: 'Central Warehouse', preparationTimeDays: 1, deliveryToPlantDays: 2, storageCapacity: 900, initialInventory: 220, reorderPoint: 300 },
+        config: { name: 'Central Warehouse', preparationTimeDays: 1, preparationCapacityPerDay: 100, deliveryToPlantDays: 2, storageCapacity: 900, initialInventory: 220, reorderPoint: 300 },
       },
       {
         id: 'node-4',
@@ -253,6 +267,7 @@ function addNode(type, x = 80 + state.nodes.length * 40, y = 60 + state.nodes.le
     initial: structuredClone(data),
     validationErrors: {},
   };
+  initializeNodeRuntime(node);
   state.nodes.push(node);
   if (!state.analyticsNodeId) state.analyticsNodeId = node.id;
   validateAll();
@@ -272,6 +287,13 @@ function resolveInitialInventory(type, data) {
   if (type === 'supplier') return data.initialInventory == null ? Infinity : data.initialInventory;
   if (type === 'analytics') return 0;
   return data.initialInventory;
+}
+
+function initializeNodeRuntime(node) {
+  if (node.type !== 'warehouse') return;
+  node.preparationQueue = [];
+  node.preparingShipments = [];
+  node.nextQueueRequestId = 1;
 }
 
 function renderNode(node) {
@@ -357,6 +379,7 @@ function getNodeBody(node) {
       <div class="kpis">
         <div class="kpi"><span class="label">On hand</span><span class="value" data-kpi="inventory">${Number.isFinite(node.inventory) ? node.inventory : '∞'}</span></div>
         <div class="kpi"><span class="label">Shipped</span><span class="value" data-kpi="shipped">${node.shipped}</span></div>
+        <div class="kpi"><span class="label">Queued</span><span class="value" data-kpi="queue">${node.preparationQueue?.length ?? 0}</span></div>
       </div>`,
     plant: `
       <div class="kpis">
@@ -873,6 +896,8 @@ function renderSelection() {
       ${node.type !== 'analytics' ? `<div class="selection-row"><span>Current simulated inventory</span><strong>${Number.isFinite(node.inventory) ? node.inventory : '∞'}</strong></div>` : ''}
       ${node.type === 'supplier' ? `<div class="selection-row"><span>Frequency</span><strong>${node.deliveryFrequencyDays} days</strong></div>` : ''}
       ${node.type === 'warehouse' ? `<div class="selection-row"><span>Prep + Delivery</span><strong>${node.preparationTimeDays + node.deliveryToPlantDays} days</strong></div>` : ''}
+      ${node.type === 'warehouse' ? `<div class="selection-row"><span>Prep queue</span><strong>${node.preparationQueue?.length ?? 0} request(s)</strong></div>` : ''}
+      ${node.type === 'warehouse' ? `<div class="selection-row"><span>Prep capacity/day</span><strong>${node.preparationCapacityPerDay ?? 'unlimited'}</strong></div>` : ''}
       ${node.type === 'plant' ? `<div class="selection-row"><span>Consumption</span><strong>${node.consumptionRatePerDay}/day</strong></div>` : ''}
       ${node.type === 'analytics' ? `<div class="selection-row"><span>Metric</span><strong>${node.metric}</strong></div>` : ''}
     </div>
@@ -937,6 +962,8 @@ function refreshSimulationNodeViews() {
     if (inventoryEl) inventoryEl.textContent = Number.isFinite(node.inventory) ? node.inventory : '∞';
     const shippedEl = el.querySelector('[data-kpi="shipped"]');
     if (shippedEl) shippedEl.textContent = node.shipped;
+    const queueEl = el.querySelector('[data-kpi="queue"]');
+    if (queueEl) queueEl.textContent = node.preparationQueue?.length ?? 0;
     const stockoutsEl = el.querySelector('[data-kpi="stockouts"]');
     if (stockoutsEl) stockoutsEl.textContent = node.stockouts;
     const metricValueEl = el.querySelector('[data-kpi="metric-value"]');
@@ -1022,28 +1049,139 @@ function suppliersShip() {
 
 function warehousesDispatch() {
   state.nodes.filter((n) => n.type === 'warehouse').forEach((warehouse) => {
-    const outboundLinks = state.links
-      .filter((l) => l.from === warehouse.id)
-      .slice()
-      .sort((a, b) => a.priority - b.priority);
-    outboundLinks.forEach((link) => {
-      const plant = getNode(link.to);
-      if (plant?.type !== 'plant') return;
-      const safety = plant.safetyStock ?? 0;
-      const desired = safety + plant.consumptionRatePerDay;
-      const need = Math.max(0, desired - plant.inventory);
-      if (need <= 0 || warehouse.inventory <= 0) return;
-      if (warehouse.reorderPoint != null && warehouse.inventory <= warehouse.reorderPoint) return;
-      const linkCapacity = getRemainingLinkCapacity(link, state.day);
-      if (linkCapacity <= 0) return;
-      const qty = Math.min(need, warehouse.inventory, linkCapacity);
-      const totalLead = warehouse.preparationTimeDays + warehouse.deliveryToPlantDays + link.transportDelayDays;
-      if (qty <= 0) return;
-      warehouse.inventory -= qty;
-      warehouse.shipped += qty;
-      queueShipment(warehouse, plant, link, qty, totalLead);
+    if (!Array.isArray(warehouse.preparationQueue)) initializeNodeRuntime(warehouse);
+    createWarehouseOutboundRequests(warehouse);
+    processWarehousePreparation(warehouse);
+    dispatchPreparedShipments(warehouse);
+  });
+}
+
+function createWarehouseOutboundRequests(warehouse) {
+  const outboundLinks = state.links
+    .filter((l) => l.from === warehouse.id)
+    .slice()
+    .sort((a, b) => a.priority - b.priority);
+  outboundLinks.forEach((link) => {
+    const plant = getNode(link.to);
+    if (plant?.type !== 'plant') return;
+    const safety = plant.safetyStock ?? 0;
+    const desired = safety + plant.consumptionRatePerDay;
+    const committedVolume = getCommittedWarehouseToPlantVolume(warehouse, link, plant);
+    const need = Math.max(0, desired - (plant.inventory + committedVolume));
+    if (need <= 0) return;
+    const request = {
+      id: `${warehouse.id}-req-${warehouse.nextQueueRequestId++}`,
+      linkId: link.id,
+      plantId: plant.id,
+      plantName: plant.name,
+      materialName: link.materialName,
+      qty: need,
+      queuedDay: state.day,
+    };
+    warehouse.preparationQueue.push(request);
+    state.deliveryStats.queueEntries += 1;
+    log(`${warehouse.name} queued outbound request ${request.id}: ${need} ${link.materialName} for ${plant.name}.`);
+  });
+}
+
+function processWarehousePreparation(warehouse) {
+  const dailyCapacity = warehouse.preparationCapacityPerDay == null ? Infinity : warehouse.preparationCapacityPerDay;
+  let capacityLeft = dailyCapacity;
+  if (capacityLeft <= 0) {
+    if (warehouse.preparationQueue.length) {
+      log(`${warehouse.name} preparation paused today (0 capacity). ${warehouse.preparationQueue.length} requests waiting.`);
+    }
+    return;
+  }
+
+  while (warehouse.preparationQueue.length > 0 && capacityLeft > 0 && warehouse.inventory > 0) {
+    const request = warehouse.preparationQueue[0];
+    const prepQty = Math.min(request.qty, warehouse.inventory, capacityLeft);
+    if (prepQty <= 0) break;
+    warehouse.preparationQueue.shift();
+    warehouse.inventory -= prepQty;
+    const queueDays = Math.max(0, state.day - request.queuedDay);
+    state.deliveryStats.queueDaysTotal += queueDays;
+    const prepOrder = {
+      requestId: request.id,
+      linkId: request.linkId,
+      plantId: request.plantId,
+      materialName: request.materialName,
+      qty: prepQty,
+      queuedDay: request.queuedDay,
+      prepStartDay: state.day,
+      readyDay: state.day + warehouse.preparationTimeDays,
+    };
+    warehouse.preparingShipments.push(prepOrder);
+    capacityLeft = Number.isFinite(capacityLeft) ? Math.max(0, capacityLeft - prepQty) : capacityLeft;
+    log(`${warehouse.name} started preparing ${prepQty} ${request.materialName} for ${request.plantName} (queued ${queueDays} day(s), ready day ${prepOrder.readyDay}).`);
+
+    if (prepQty < request.qty) {
+      const remainingQty = request.qty - prepQty;
+      warehouse.preparationQueue.unshift({ ...request, qty: remainingQty, queuedDay: request.queuedDay });
+      log(`${warehouse.name} partially prepared request ${request.id}; ${remainingQty} units remain in queue.`);
+    }
+  }
+}
+
+function dispatchPreparedShipments(warehouse) {
+  if (!warehouse.preparingShipments.length) return;
+  const remainingPrep = [];
+  const ready = warehouse.preparingShipments
+    .filter((prep) => prep.readyDay <= state.day)
+    .sort((a, b) => a.queuedDay - b.queuedDay);
+  const notReady = warehouse.preparingShipments.filter((prep) => prep.readyDay > state.day);
+  const readyByLink = new Map();
+  ready.forEach((prep) => {
+    if (!readyByLink.has(prep.linkId)) readyByLink.set(prep.linkId, []);
+    readyByLink.get(prep.linkId).push(prep);
+  });
+
+  readyByLink.forEach((orders, linkId) => {
+    const link = state.links.find((l) => l.id === linkId);
+    if (!link) {
+      remainingPrep.push(...orders);
+      return;
+    }
+    let linkCapacity = getRemainingLinkCapacity(link, state.day);
+    orders.forEach((order) => {
+      const plant = getNode(order.plantId);
+      if (!plant || plant.type !== 'plant') {
+        remainingPrep.push(order);
+        return;
+      }
+      const dispatchQty = Math.min(order.qty, linkCapacity);
+      if (dispatchQty > 0) {
+        warehouse.shipped += dispatchQty;
+        queueShipment(warehouse, plant, link, dispatchQty, warehouse.deliveryToPlantDays + link.transportDelayDays);
+        linkCapacity -= dispatchQty;
+        const fulfillmentDelay = Math.max(0, state.day - order.queuedDay);
+        state.deliveryStats.fulfilledRequests += 1;
+        state.deliveryStats.fulfillmentDelayTotal += fulfillmentDelay;
+        log(`${warehouse.name} dispatched prepared order ${order.requestId} (${dispatchQty} ${order.materialName}) to ${plant.name} after ${fulfillmentDelay} day(s) total delay.`);
+      }
+
+      if (dispatchQty < order.qty) {
+        remainingPrep.push({ ...order, qty: order.qty - dispatchQty });
+        log(`${warehouse.name} dispatch delayed for ${order.requestId}; ${order.qty - dispatchQty} units waiting on link capacity.`);
+      }
     });
   });
+
+  warehouse.preparingShipments = [...notReady, ...remainingPrep];
+}
+
+function getCommittedWarehouseToPlantVolume(warehouse, link, plant) {
+  const queued = (warehouse.preparationQueue ?? [])
+    .filter((request) => request.linkId === link.id && request.plantId === plant.id)
+    .reduce((sum, request) => sum + request.qty, 0);
+  const preparing = (warehouse.preparingShipments ?? [])
+    .filter((prep) => prep.linkId === link.id && prep.plantId === plant.id)
+    .reduce((sum, prep) => sum + prep.qty, 0);
+  const inTransit = state.shipments
+    .filter((shipment) => shipment.from === warehouse.id && shipment.to === plant.id && shipment.linkId === link.id)
+    .reduce((sum, shipment) => sum + shipment.qty, 0);
+  return queued + preparing + inTransit;
 }
 
 function plantsConsume() {
@@ -1114,6 +1252,12 @@ function computeKpis() {
   const totalDeliveries = state.deliveryStats.dispatched;
   const onTime = state.deliveryStats.onTime;
   const onTimeRate = totalDeliveries ? onTime / totalDeliveries : 1;
+  const averageQueueTimeDays = state.deliveryStats.queueEntries
+    ? state.deliveryStats.queueDaysTotal / state.deliveryStats.queueEntries
+    : 0;
+  const averageFulfillmentDelayDays = state.deliveryStats.fulfilledRequests
+    ? state.deliveryStats.fulfillmentDelayTotal / state.deliveryStats.fulfilledRequests
+    : 0;
 
   state.kpis = {
     stockoutCount,
@@ -1124,6 +1268,8 @@ function computeKpis() {
       total: totalDeliveries,
       rate: Number(onTimeRate.toFixed(4)),
     },
+    averageQueueTimeDays: Number(averageQueueTimeDays.toFixed(2)),
+    averageFulfillmentDelayDays: Number(averageFulfillmentDelayDays.toFixed(2)),
     totalShippedVolume: state.nodes.reduce((sum, node) => sum + node.shipped, 0),
     totalShipmentCost: Number(state.deliveryStats.shipmentCost.toFixed(2)),
   };
@@ -1161,6 +1307,14 @@ function buildSimulationOutput() {
         qty: shipment.qty,
         departureDay: shipment.departureDay,
         arrivalDay: shipment.arrivalDay,
+      })),
+      warehouseQueueState: state.nodes.filter((node) => node.type === 'warehouse').map((warehouse) => ({
+        id: warehouse.id,
+        name: warehouse.name,
+        queuedRequests: (warehouse.preparationQueue ?? []).length,
+        queuedVolume: (warehouse.preparationQueue ?? []).reduce((sum, request) => sum + request.qty, 0),
+        preparingOrders: (warehouse.preparingShipments ?? []).length,
+        preparingVolume: (warehouse.preparingShipments ?? []).reduce((sum, prep) => sum + prep.qty, 0),
       })),
     },
     eventLog: structuredClone(state.eventLog),
@@ -1206,10 +1360,20 @@ function initializeSimulationTracking() {
   state.inventoryHistoryByNode = {};
   state.analyticsMetricHistoryByNode = {};
   state.transitHistory = [];
-  state.deliveryStats = { dispatched: 0, onTime: 0, deliveredVolume: 0, shipmentCost: 0 };
+  state.deliveryStats = {
+    dispatched: 0,
+    onTime: 0,
+    deliveredVolume: 0,
+    shipmentCost: 0,
+    queueEntries: 0,
+    queueDaysTotal: 0,
+    fulfilledRequests: 0,
+    fulfillmentDelayTotal: 0,
+  };
   state.shipmentsByDay = [];
   state.stockoutEvents = [];
   state.nodes.forEach((node) => {
+    initializeNodeRuntime(node);
     state.inventoryHistoryByNode[node.id] = [{
       day: state.day,
       inventory: Number.isFinite(node.inventory) ? node.inventory : null,
@@ -1233,6 +1397,7 @@ function resetSimulation() {
     node.received = 0;
     node.shipped = 0;
     node.stockouts = 0;
+    initializeNodeRuntime(node);
     refreshNode(node.id);
   });
   validateAll();
@@ -1309,6 +1474,19 @@ function migrateScenario(rawScenario) {
     };
   }
 
+  if (version < 4) {
+    migrated.nodes = (migrated.nodes ?? []).map((node) => {
+      if (node?.type !== 'warehouse') return node;
+      return {
+        ...node,
+        config: {
+          ...(node.config ?? {}),
+          preparationCapacityPerDay: node.config?.preparationCapacityPerDay ?? null,
+        },
+      };
+    });
+  }
+
   migrated.ui = {
     showLinkLabels: Boolean(migrated.ui?.showLinkLabels),
     allowWarehouseToWarehouse: Boolean(migrated.ui?.allowWarehouseToWarehouse),
@@ -1356,6 +1534,7 @@ function importScenarioObject(rawScenario, options = {}) {
       initial: structuredClone(config),
       validationErrors: {},
     };
+    initializeNodeRuntime(node);
     state.nodes.push(node);
     renderNode(node);
   });
@@ -1516,6 +1695,10 @@ function readMetricValue(analyticsNode) {
       return `${Math.round(state.kpis.warehouseUtilization * 100)}%`;
     case 'on_time_rate':
       return `${Math.round(state.kpis.onTimeDeliveries.rate * 100)}%`;
+    case 'avg_queue_time':
+      return `${state.kpis.averageQueueTimeDays.toFixed(1)} d`;
+    case 'avg_fulfillment_delay':
+      return `${state.kpis.averageFulfillmentDelayDays.toFixed(1)} d`;
     case 'total_shipped':
       return state.kpis.totalShippedVolume;
     case 'shipments_today':
@@ -1542,6 +1725,10 @@ function readMetricNumericValue(analyticsNode) {
       return Number((state.kpis.warehouseUtilization * 100).toFixed(2));
     case 'on_time_rate':
       return Number((state.kpis.onTimeDeliveries.rate * 100).toFixed(2));
+    case 'avg_queue_time':
+      return state.kpis.averageQueueTimeDays;
+    case 'avg_fulfillment_delay':
+      return state.kpis.averageFulfillmentDelayDays;
     case 'total_shipped':
       return state.kpis.totalShippedVolume;
     case 'shipments_today':
