@@ -29,6 +29,17 @@
       </section>
 
       <section class="panel">
+        <h2>SCFL-node package</h2>
+        <p class="panel-note">Manage installable node types (ComfyUI-style custom nodes).</p>
+        <div class="button-grid scenario-grid">
+          <button id="importNodePackageBtn">Import node JSON</button>
+          <button id="exportNodePackageBtn" class="ghost">Export package</button>
+        </div>
+        <input id="importNodePackageInput" type="file" accept="application/json,.json" hidden />
+        <div id="nodePackageList" class="node-package-list empty-state">No community nodes installed.</div>
+      </section>
+
+      <section class="panel">
         <h2>Scenario</h2>
         <label for="scenarioPreset">Preset</label>
         <select id="scenarioPreset">

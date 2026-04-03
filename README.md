@@ -33,16 +33,19 @@ What this draft does
 - Scenario management:
   - Auto-saves current scenario to localStorage.
   - Import/export scenario JSON.
+  - SCFL-node package manager to import/export community node definitions.
   - Built-in presets: Blank + Demo.
   - Versioned scenario schema with migration hooks.
 
 Scenario JSON versioning strategy
-- Current version: `4`.
+- Current version: `6`.
 - `migrateScenario()` upgrades old payloads to the latest format before import.
 - Version migration rules currently include:
   - v1 → v2: adds `globalPythonCode`, `ui`, and fills missing link fields with defaults.
   - v2 → v3: normalizes UI flags (`showLinkLabels`, `allowWarehouseToWarehouse`, `allowPlantOutbound`).
   - v3 → v4: adds warehouse `preparationCapacityPerDay` (optional, defaults to unlimited).
+  - v4 → v5: stores link flow type (`material` or `information`) explicitly.
+  - v5 → v6: adds `nodePackage` (`SCFL-node`) for custom/community node type definitions.
 - Future versions should add a new migration branch and keep previous branches intact for backward compatibility.
 
 Keyboard shortcuts
