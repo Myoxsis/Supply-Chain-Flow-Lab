@@ -6,20 +6,16 @@ const canvasContextMenu = document.getElementById('canvasContextMenu');
 const canvasContextSearch = document.getElementById('canvasContextSearch');
 const nodeTemplate = document.getElementById('nodeTemplate');
 const selectionPanel = document.getElementById('selectionPanel');
-const sidebar = document.getElementById('sidebar');
-const sidebarToggle = document.getElementById('sidebarToggle');
-const navItems = Array.from(document.querySelectorAll('.nav-item'));
-const navPanels = Array.from(document.querySelectorAll('.nav-panel'));
 const dayValue = document.getElementById('dayValue');
 const transitValue = document.getElementById('transitValue');
 const simStatusValue = document.getElementById('simStatusValue');
 const eventLog = document.getElementById('eventLog');
 const tempWire = document.getElementById('tempWire');
-const linkInspectorTooltip = document.getElementById('linkInspectorTooltip');
 const kpiBar = document.getElementById('kpiBar');
 const inventoryChart = document.getElementById('inventoryChart');
 const shipmentChart = document.getElementById('shipmentChart');
 const analyticsNodeSelect = document.getElementById('analyticsNodeSelect');
+const globalPythonCodeEl = document.getElementById('globalPythonCode');
 const showLinkLabelsInput = document.getElementById('showLinkLabels');
 const allowWarehouseToWarehouseInput = document.getElementById('allowWarehouseToWarehouse');
 const allowPlantOutboundInput = document.getElementById('allowPlantOutbound');
@@ -59,14 +55,6 @@ const MAX_ZOOM = 2.5;
 const GRID_SIZE = 24;
 const SCENARIO_STORAGE_KEY = 'supply-chain-flow-lab:scenario';
 const SCENARIO_VERSION = 6;
-
-
-function cloneValue(value) {
-  if (typeof globalThis.structuredClone === 'function') {
-    return globalThis.structuredClone(value);
-  }
-  return value == null ? value : JSON.parse(JSON.stringify(value));
-}
 
 const NODE_SCHEMAS = {
   supplier: {
@@ -128,24 +116,6 @@ const NODE_SCHEMAS = {
   },
 };
 const CORE_NODE_TYPES = Object.keys(NODE_SCHEMAS);
-const CORE_NODE_PACKAGE_ENTRIES = CORE_NODE_TYPES.map((type) => ({
-  type,
-  label: NODE_SCHEMAS[type].label,
-  description: 'Built-in node',
-  enabled: true,
-  source: 'core',
-  folder: 'nodes',
-}));
-
-function createDefaultNodePackage() {
-  return {
-    name: 'SCFL-node',
-    customNodes: [],
-    folders: {
-      nodes: cloneValue(CORE_NODE_PACKAGE_ENTRIES),
-    },
-  };
-}
 
 const state = {
   nodes: [],
@@ -210,7 +180,8 @@ const state = {
   contextCreateAt: null,
   clipboard: null,
   nodePackage: {
-    ...createDefaultNodePackage(),
+    name: 'SCFL-node',
+    customNodes: [],
   },
 };
 
@@ -297,20 +268,6 @@ function getCreatableNodeTypes() {
   return [...CORE_NODE_TYPES, ...customEnabled];
 }
 
-function syncNodePackageFolders() {
-  const customEntries = state.nodePackage.customNodes.map((node) => ({
-    type: node.type,
-    label: node.schema.label,
-    description: node.description || 'Custom node',
-    enabled: node.enabled !== false,
-    source: 'custom',
-    folder: 'nodes',
-  }));
-  state.nodePackage.folders = {
-    nodes: [...CORE_NODE_PACKAGE_ENTRIES, ...customEntries],
-  };
-}
-
 function refreshNodeCreationActions() {
   const types = getCreatableNodeTypes();
   if (nodeCreateToolbar) {
@@ -360,7 +317,7 @@ function addNode(type, x = 80 + state.nodes.length * 40, y = 60 + state.nodes.le
     received: 0,
     shipped: 0,
     stockouts: 0,
-    initial: cloneValue(data),
+    initial: structuredClone(data),
     validationErrors: {},
   };
   initializeNodeRuntime(node);
@@ -937,7 +894,7 @@ function drawLinks() {
       state.selectedLinkIds = [link.id];
       state.selectedNodeIds = [];
       updateSelectionClasses();
-      showLinkInspector(link, e.clientX, e.clientY);
+      renderSelection();
     });
     linksSvg.appendChild(path);
     if (state.ui.showLinkLabels) {
@@ -952,54 +909,6 @@ function drawLinks() {
   linksSvg.appendChild(tempLinkPath);
 }
 
-function showLinkInspector(link, clientX, clientY) {
-  if (!linkInspectorTooltip) return;
-  const linkErrors = Object.values(link.validationErrors ?? {});
-  const fieldRows = LINK_SCHEMA.map((field) => {
-    const value = link[field.key] == null ? '' : link[field.key];
-    const input = field.type === 'string'
-      ? `<input type="text" data-link-field="${field.key}" value="${value}" />`
-      : `<input type="number" min="${field.min ?? 0}" step="${field.step ?? 1}" data-link-field="${field.key}" value="${value}" />`;
-    return `<label class="field"><span>${field.label}</span>${input}</label>`;
-  }).join('');
-  linkInspectorTooltip.innerHTML = `
-    <div class="selection-grid">
-      <div class="selection-row"><span>Selection</span><strong>Link</strong></div>
-      <div class="selection-row"><span>Flow type</span><strong>${link.linkType ?? 'material'}</strong></div>
-      <div class="selection-row"><span>From</span><strong>${getNode(link.from)?.name ?? 'Unknown'}</strong></div>
-      <div class="selection-row"><span>To</span><strong>${getNode(link.to)?.name ?? 'Unknown'}</strong></div>
-      <div class="selection-row"><span>Cost / shipment</span><strong>${formatLinkCost(link.costPerShipment)}</strong></div>
-    </div>
-    <div class="link-editor">${fieldRows}</div>
-    ${linkErrors.length ? `<div class="validation-block"><strong>Link validation errors</strong><ul>${linkErrors.map((error) => `<li>${error}</li>`).join('')}</ul></div>` : '<div class="validation-ok">No link validation errors.</div>'}
-  `;
-  linkInspectorTooltip.querySelectorAll('[data-link-field]').forEach((input) => {
-    input.addEventListener('input', (e) => {
-      const fieldKey = e.target.dataset.linkField;
-      const fieldSchema = LINK_SCHEMA.find((item) => item.key === fieldKey);
-      let value = e.target.value;
-      if (fieldSchema.type !== 'string') {
-        value = value.trim() === '' ? null : Number(value);
-        if (fieldSchema.type === 'int' && value != null) value = Math.trunc(value);
-      }
-      link[fieldKey] = value;
-      validateAll();
-      drawLinks();
-      showLinkInspector(link, clientX, clientY);
-    });
-  });
-  const workspaceRect = workspace.getBoundingClientRect();
-  const left = Math.max(10, Math.min(clientX - workspaceRect.left + 8, workspaceRect.width - 290));
-  const top = Math.max(10, Math.min(clientY - workspaceRect.top + 8, workspaceRect.height - 360));
-  linkInspectorTooltip.style.left = `${left}px`;
-  linkInspectorTooltip.style.top = `${top}px`;
-  linkInspectorTooltip.classList.remove('hidden');
-}
-
-function hideLinkInspector() {
-  linkInspectorTooltip?.classList.add('hidden');
-}
-
 function portCenter(el) {
   const rect = el.getBoundingClientRect();
   const wRect = workspace.getBoundingClientRect();
@@ -1007,6 +916,46 @@ function portCenter(el) {
 }
 
 function renderSelection() {
+  if (state.selectedLinkIds.length === 1) {
+    const link = state.links.find((l) => l.id === state.selectedLinkIds[0]);
+    if (link) {
+      const linkErrors = Object.values(link.validationErrors ?? {});
+      const fieldRows = LINK_SCHEMA.map((field) => {
+        const value = link[field.key] == null ? '' : link[field.key];
+        const input = field.type === 'string'
+          ? `<input type="text" data-link-field="${field.key}" value="${value}" />`
+          : `<input type="number" min="${field.min ?? 0}" step="${field.step ?? 1}" data-link-field="${field.key}" value="${value}" />`;
+        return `<label class="field"><span>${field.label}</span>${input}</label>`;
+      }).join('');
+      selectionPanel.innerHTML = `
+        <div class="selection-grid">
+          <div class="selection-row"><span>Selection</span><strong>Link</strong></div>
+          <div class="selection-row"><span>Flow type</span><strong>${link.linkType ?? 'material'}</strong></div>
+          <div class="selection-row"><span>From</span><strong>${getNode(link.from)?.name ?? 'Unknown'}</strong></div>
+          <div class="selection-row"><span>To</span><strong>${getNode(link.to)?.name ?? 'Unknown'}</strong></div>
+          <div class="selection-row"><span>Cost / shipment</span><strong>${formatLinkCost(link.costPerShipment)}</strong></div>
+        </div>
+        <div class="link-editor">${fieldRows}</div>
+        ${linkErrors.length ? `<div class="validation-block"><strong>Link validation errors</strong><ul>${linkErrors.map((e) => `<li>${e}</li>`).join('')}</ul></div>` : '<div class="validation-ok">No link validation errors.</div>'}`;
+      selectionPanel.querySelectorAll('[data-link-field]').forEach((input) => {
+        input.addEventListener('input', (e) => {
+          const fieldKey = e.target.dataset.linkField;
+          const fieldSchema = LINK_SCHEMA.find((item) => item.key === fieldKey);
+          let value = e.target.value;
+          if (fieldSchema.type !== 'string') {
+            value = value.trim() === '' ? null : Number(value);
+            if (fieldSchema.type === 'int' && value != null) value = Math.trunc(value);
+          }
+          link[fieldKey] = value;
+          validateAll();
+          renderSelection();
+          drawLinks();
+        });
+      });
+      return;
+    }
+  }
+
   if (!state.selectedNodeIds.length) {
     selectionPanel.innerHTML = '<div class="empty-state">Select nodes or links to inspect them.</div>';
     return;
@@ -1456,10 +1405,10 @@ function buildSimulationOutput() {
         preparingVolume: (warehouse.preparingShipments ?? []).reduce((sum, prep) => sum + prep.qty, 0),
       })),
     },
-    eventLog: cloneValue(state.eventLog),
-    inventoryTimeSeriesByNode: cloneValue(state.inventoryHistoryByNode),
-    shipmentsInTransitHistory: cloneValue(state.transitHistory),
-    kpiSummary: cloneValue(state.kpis),
+    eventLog: structuredClone(state.eventLog),
+    inventoryTimeSeriesByNode: structuredClone(state.inventoryHistoryByNode),
+    shipmentsInTransitHistory: structuredClone(state.transitHistory),
+    kpiSummary: structuredClone(state.kpis),
   };
 }
 
@@ -1531,7 +1480,7 @@ function resetSimulation() {
   state.day = 0;
   state.shipments = [];
   state.nodes.forEach((node) => {
-    Object.assign(node, cloneValue(node.initial));
+    Object.assign(node, structuredClone(node.initial));
     node.inventory = resolveInitialInventory(node.type, node);
     node.received = 0;
     node.shipped = 0;
@@ -1595,7 +1544,7 @@ function migrateScenario(rawScenario) {
     throw new Error(`Unsupported scenario version ${version}. This app supports up to version ${SCENARIO_VERSION}.`);
   }
 
-  const migrated = cloneValue(rawScenario);
+  const migrated = structuredClone(rawScenario);
 
   if (version < 2) {
     migrated.globalPythonCode = migrated.globalPythonCode ?? '';
@@ -1645,24 +1594,6 @@ function migrateScenario(rawScenario) {
   migrated.nodePackage = migrated.nodePackage ?? { name: 'SCFL-node', customNodes: [] };
   migrated.nodePackage.name = 'SCFL-node';
   migrated.nodePackage.customNodes = Array.isArray(migrated.nodePackage.customNodes) ? migrated.nodePackage.customNodes : [];
-  const folderNodes = migrated.nodePackage?.folders?.nodes;
-  if (Array.isArray(folderNodes) && folderNodes.length) {
-    const existingByType = new Set(migrated.nodePackage.customNodes.map((node) => node.type));
-    folderNodes.forEach((node, idx) => {
-      if (!node || typeof node !== 'object') return;
-      const type = String(node.type ?? '').toLowerCase();
-      if (!type || CORE_NODE_TYPES.includes(type) || existingByType.has(type)) return;
-      try {
-        const normalized = normalizeCustomNodeDefinition(node, idx + 1);
-        normalized.enabled = node.enabled !== false;
-        migrated.nodePackage.customNodes.push(normalized);
-        existingByType.add(normalized.type);
-      } catch (error) {
-        console.warn('Skipping invalid nodes/ folder entry during migration', error);
-      }
-    });
-  }
-  migrated.nodePackage.folders = { nodes: cloneValue(CORE_NODE_PACKAGE_ENTRIES) };
 
   migrated.version = SCENARIO_VERSION;
   return migrated;
@@ -1704,30 +1635,25 @@ function normalizeCustomNodeDefinition(rawNode, idx = 1) {
 
 function renderNodePackageList() {
   if (!nodePackageList) return;
-  const installed = state.nodePackage.folders?.nodes ?? [];
+  const installed = state.nodePackage.customNodes;
   if (!installed.length) {
-    nodePackageList.innerHTML = 'No nodes found in package folder "nodes".';
+    nodePackageList.innerHTML = 'No community nodes installed.';
     return;
   }
-  nodePackageList.innerHTML = `
-    <div class="node-package-folder-title">nodes/</div>
-    ${installed.map((node) => `
+  nodePackageList.innerHTML = installed.map((node) => `
     <div class="node-package-item">
       <div class="node-package-row">
         <div>
-          <strong>${node.label}</strong>
+          <strong>${node.schema.label}</strong>
           <small>${node.type} · ${node.description || 'No description'}</small>
         </div>
         <div class="node-package-actions">
-          ${node.source === 'custom'
-            ? `<label><input type="checkbox" data-custom-node-toggle="${node.type}" ${node.enabled ? 'checked' : ''} /> enabled</label>
-               <button class="ghost small" data-custom-node-remove="${node.type}">Remove</button>`
-            : '<small>core</small>'}
+          <label><input type="checkbox" data-custom-node-toggle="${node.type}" ${node.enabled ? 'checked' : ''} /> enabled</label>
+          <button class="ghost small" data-custom-node-remove="${node.type}">Remove</button>
         </div>
       </div>
     </div>
-  `).join('')}
-  `;
+  `).join('');
 
   nodePackageList.querySelectorAll('[data-custom-node-toggle]').forEach((input) => {
     input.addEventListener('change', (e) => {
@@ -1742,7 +1668,6 @@ function renderNodePackageList() {
     button.addEventListener('click', (e) => {
       const type = e.currentTarget.dataset.customNodeRemove;
       state.nodePackage.customNodes = state.nodePackage.customNodes.filter((node) => node.type !== type);
-      syncNodePackageFolders();
       refreshNodeCreationActions();
       renderNodePackageList();
       persistScenarioToLocalStorage();
@@ -1758,12 +1683,13 @@ function importScenarioObject(rawScenario, options = {}) {
   clearGraph();
   state.day = Number.isInteger(scenario.day) && scenario.day >= 0 ? scenario.day : 0;
   state.globalPythonCode = typeof scenario.globalPythonCode === 'string' ? scenario.globalPythonCode : '';
+  globalPythonCodeEl.value = state.globalPythonCode;
   state.ui.showLinkLabels = Boolean(scenario.ui?.showLinkLabels);
   state.ui.allowWarehouseToWarehouse = Boolean(scenario.ui?.allowWarehouseToWarehouse);
   state.ui.allowPlantOutbound = Boolean(scenario.ui?.allowPlantOutbound);
   state.ui.showCreateToolbar = scenario.ui?.showCreateToolbar !== false;
   state.ui.snapToGrid = Boolean(scenario.ui?.snapToGrid);
-  state.nodePackage = createDefaultNodePackage();
+  state.nodePackage = { name: 'SCFL-node', customNodes: [] };
   (scenario.nodePackage?.customNodes ?? []).forEach((rawNode, idx) => {
     try {
       const normalized = normalizeCustomNodeDefinition(rawNode, idx + 1);
@@ -1775,7 +1701,6 @@ function importScenarioObject(rawScenario, options = {}) {
       console.warn('Skipping invalid custom node definition', error);
     }
   });
-  syncNodePackageFolders();
   refreshNodeCreationActions();
   renderNodePackageList();
 
@@ -1796,7 +1721,7 @@ function importScenarioObject(rawScenario, options = {}) {
       received: 0,
       shipped: 0,
       stockouts: 0,
-      initial: cloneValue(config),
+      initial: structuredClone(config),
       validationErrors: {},
     };
     initializeNodeRuntime(node);
@@ -1862,8 +1787,8 @@ function serializeGraph() {
     version: SCENARIO_VERSION,
     day: state.day,
     globalPythonCode: state.globalPythonCode,
-    ui: cloneValue(state.ui),
-    nodePackage: cloneValue(state.nodePackage),
+    ui: structuredClone(state.ui),
+    nodePackage: structuredClone(state.nodePackage),
     nodes: state.nodes.map((node) => {
       const schemaKeys = getNodeSchema(node.type).fields.map((f) => f.key);
       const config = schemaKeys.reduce((acc, key) => {
@@ -2222,11 +2147,11 @@ function copySelectedNodes() {
   const links = state.links.filter((link) => selectedNodeIds.has(link.from) && selectedNodeIds.has(link.to));
   state.clipboard = {
     nodes: selectedNodes.map((node) => ({
-      node: cloneValue(node),
+      node: structuredClone(node),
       offsetX: node.x - minX,
       offsetY: node.y - minY,
     })),
-    links: links.map((link) => cloneValue(link)),
+    links: links.map((link) => structuredClone(link)),
   };
   log(`Copied ${selectedNodes.length} node${selectedNodes.length > 1 ? 's' : ''}`);
   return true;
@@ -2240,14 +2165,14 @@ function pasteClipboard(options = {}) {
   const cloneMap = new Map();
   const pastedNodeIds = state.clipboard.nodes.map((entry, idx) => {
     const id = `node-${state.nodeCounter++}`;
-    const copy = cloneValue(entry.node);
+    const copy = structuredClone(entry.node);
     const next = snapPosition(entry.node.x + dx, entry.node.y + dy);
     copy.id = id;
     if (renameAsCopy) copy.name = `${entry.node.name} Copy`;
     copy.x = Math.max(16, next.x);
     copy.y = Math.max(16, next.y);
     copy.z = state.zCounter++;
-    copy.initial = cloneValue(copy.initial);
+    copy.initial = structuredClone(copy.initial);
     copy.validationErrors = {};
     cloneMap.set(entry.node.id, id);
     state.nodes.push(copy);
@@ -2260,7 +2185,7 @@ function pasteClipboard(options = {}) {
     const to = cloneMap.get(link.to);
     if (!from || !to) return;
     state.links.push({
-      ...cloneValue(link),
+      ...structuredClone(link),
       id: `link-${state.linkCounter++}`,
       from,
       to,
@@ -2527,7 +2452,6 @@ function resumeSimulation() {
 
 workspace.addEventListener('pointerdown', (e) => {
   hideCanvasContextMenu();
-  if (!e.target.closest('#linkInspectorTooltip') && !e.target.closest('.link-path')) hideLinkInspector();
   const onNode = e.target.closest('.node-card');
   const onPort = e.target.closest('.port');
   if (onNode || onPort) return;
@@ -2556,10 +2480,8 @@ workspace.addEventListener('wheel', (e) => {
 }, { passive: false });
 
 workspace.addEventListener('dblclick', fitToGraph);
-workspace.addEventListener('pointerdown', (e) => {
-  if (e.target.closest('#linkInspectorTooltip') || e.target.closest('.link-path')) return;
+workspace.addEventListener('pointerdown', () => {
   state.selectedLinkIds = [];
-  hideLinkInspector();
   updateSelectionClasses();
   renderSelection();
 }, true);
@@ -2678,13 +2600,13 @@ if (loadPresetBtn) {
   loadPresetBtn.addEventListener('click', () => {
     const preset = scenarioPresetSelect?.value ?? 'blank';
     if (!BUILT_IN_SCENARIOS[preset]) return;
-    importScenarioObject(cloneValue(BUILT_IN_SCENARIOS[preset]), { logMessage: `${preset === 'demo' ? 'Demo' : 'Blank'} scenario loaded` });
+    importScenarioObject(structuredClone(BUILT_IN_SCENARIOS[preset]), { logMessage: `${preset === 'demo' ? 'Demo' : 'Blank'} scenario loaded` });
     persistScenarioToLocalStorage();
   });
 }
 if (resetScenarioBtn) {
   resetScenarioBtn.addEventListener('click', () => {
-    importScenarioObject(cloneValue(BUILT_IN_SCENARIOS.blank), { logMessage: 'Scenario reset to blank' });
+    importScenarioObject(structuredClone(BUILT_IN_SCENARIOS.blank), { logMessage: 'Scenario reset to blank' });
     persistScenarioToLocalStorage();
   });
 }
@@ -2753,21 +2675,14 @@ if (importNodePackageBtn && importNodePackageInput) {
     try {
       const text = await file.text();
       const parsed = JSON.parse(text);
-      const rawNodes = Array.isArray(parsed)
-        ? parsed
-        : (Array.isArray(parsed.nodes)
-          ? parsed.nodes
-          : (Array.isArray(parsed?.folders?.nodes) ? parsed.folders.nodes : []));
+      const rawNodes = Array.isArray(parsed) ? parsed : (Array.isArray(parsed.nodes) ? parsed.nodes : []);
       if (!rawNodes.length) throw new Error('JSON must contain a nodes array.');
       rawNodes.forEach((rawNode, idx) => {
-        const rawType = String(rawNode?.type ?? '').toLowerCase();
-        if (CORE_NODE_TYPES.includes(rawType)) return;
         const normalized = normalizeCustomNodeDefinition(rawNode, idx + 1);
         const existingIdx = state.nodePackage.customNodes.findIndex((node) => node.type === normalized.type);
         if (existingIdx >= 0) state.nodePackage.customNodes[existingIdx] = normalized;
         else state.nodePackage.customNodes.push(normalized);
       });
-      syncNodePackageFolders();
       refreshNodeCreationActions();
       renderNodePackageList();
       persistScenarioToLocalStorage();
@@ -2782,7 +2697,6 @@ if (importNodePackageBtn && importNodePackageInput) {
 }
 if (exportNodePackageBtn) {
   exportNodePackageBtn.addEventListener('click', () => {
-    syncNodePackageFolders();
     const payload = JSON.stringify(state.nodePackage, null, 2);
     const blob = new Blob([payload], { type: 'application/json' });
     const href = URL.createObjectURL(blob);
@@ -2802,7 +2716,6 @@ globalPythonCodeEl.addEventListener('input', (e) => {
 });
 state.globalPythonCode = globalPythonCodeEl.value;
 setSnapToGrid(state.ui.snapToGrid);
-syncNodePackageFolders();
 renderNodePackageList();
 if (showLinkLabelsInput) {
   showLinkLabelsInput.checked = state.ui.showLinkLabels;
@@ -2832,25 +2745,9 @@ if (allowPlantOutboundInput) {
     persistScenarioToLocalStorage();
   });
 }
-if (sidebarToggle) {
-  sidebarToggle.addEventListener('click', () => {
-    const collapsed = sidebar?.classList.toggle('collapsed');
-    document.querySelector('.app-shell')?.classList.toggle('nav-open', !collapsed);
-  });
-}
-navItems.forEach((item) => {
-  item.addEventListener('click', () => {
-    navItems.forEach((nav) => nav.classList.remove('active'));
-    item.classList.add('active');
-    const panelId = item.dataset.navTarget;
-    navPanels.forEach((panel) => panel.classList.toggle('active', panel.id === panelId));
-    sidebar?.classList.remove('collapsed');
-    document.querySelector('.app-shell')?.classList.add('nav-open');
-  });
-});
 startScenarioAutosave();
 if (!loadScenarioFromLocalStorage()) {
-  importScenarioObject(cloneValue(BUILT_IN_SCENARIOS.demo), { logMessage: 'Built-in demo scenario loaded' });
+  importScenarioObject(structuredClone(BUILT_IN_SCENARIOS.demo), { logMessage: 'Built-in demo scenario loaded' });
   persistScenarioToLocalStorage();
 }
 
@@ -2858,8 +2755,8 @@ window.SupplyChainFlowLab = {
   serializeGraph,
   importScenarioObject,
   migrateScenario,
-  loadBuiltInScenario: (name) => importScenarioObject(cloneValue(BUILT_IN_SCENARIOS[name] ?? BUILT_IN_SCENARIOS.blank)),
-  getState: () => cloneValue({ nodes: state.nodes, links: state.links, graphErrors: state.graphErrors, globalPythonCode: state.globalPythonCode }),
+  loadBuiltInScenario: (name) => importScenarioObject(structuredClone(BUILT_IN_SCENARIOS[name] ?? BUILT_IN_SCENARIOS.blank)),
+  getState: () => structuredClone({ nodes: state.nodes, links: state.links, graphErrors: state.graphErrors, globalPythonCode: state.globalPythonCode }),
   stepSimulation,
   simulateDays,
   getSimulationOutput: buildSimulationOutput,

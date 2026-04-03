@@ -33,9 +33,7 @@ What this draft does
 - Scenario management:
   - Auto-saves current scenario to localStorage.
   - Import/export scenario JSON.
-  - SCFL-node package manager with a ComfyUI-style `nodes/` folder view.
-  - Built-in Supplier / Warehouse / Plant / Analytics are managed as core entries in `nodes/`.
-  - Import/export community node definitions from either `nodes` or `folders.nodes` JSON payloads.
+  - SCFL-node package manager to import/export community node definitions.
   - Built-in presets: Blank + Demo.
   - Versioned scenario schema with migration hooks.
 
