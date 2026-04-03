@@ -19,6 +19,7 @@ const globalPythonCodeEl = document.getElementById('globalPythonCode');
 const showLinkLabelsInput = document.getElementById('showLinkLabels');
 const allowWarehouseToWarehouseInput = document.getElementById('allowWarehouseToWarehouse');
 const allowPlantOutboundInput = document.getElementById('allowPlantOutbound');
+const snapToGridInput = document.getElementById('snapToGrid');
 const scenarioPresetSelect = document.getElementById('scenarioPreset');
 const loadPresetBtn = document.getElementById('loadPresetBtn');
 const resetScenarioBtn = document.getElementById('resetScenarioBtn');
@@ -27,6 +28,14 @@ const importScenarioBtn = document.getElementById('importScenarioBtn');
 const importScenarioInput = document.getElementById('importScenarioInput');
 const tickSpeedInput = document.getElementById('tickSpeed');
 const tickSpeedValue = document.getElementById('tickSpeedValue');
+const copySelectionBtn = document.getElementById('copySelectionBtn');
+const pasteSelectionBtn = document.getElementById('pasteSelectionBtn');
+const alignLeftBtn = document.getElementById('alignLeftBtn');
+const alignRightBtn = document.getElementById('alignRightBtn');
+const alignTopBtn = document.getElementById('alignTopBtn');
+const alignBottomBtn = document.getElementById('alignBottomBtn');
+const distributeHorizontalBtn = document.getElementById('distributeHorizontalBtn');
+const distributeVerticalBtn = document.getElementById('distributeVerticalBtn');
 const canvasContextActions = canvasContextMenu?.querySelector('.canvas-context-actions');
 const canvasContextEmpty = canvasContextMenu?.querySelector('.context-empty');
 const tempLinkPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
@@ -39,6 +48,7 @@ workspace.appendChild(selectionBox);
 
 const MIN_ZOOM = 0.35;
 const MAX_ZOOM = 2.5;
+const GRID_SIZE = 24;
 const SCENARIO_STORAGE_KEY = 'supply-chain-flow-lab:scenario';
 const SCENARIO_VERSION = 3;
 
@@ -146,8 +156,10 @@ const state = {
     allowWarehouseToWarehouse: false,
     allowPlantOutbound: false,
     showCreateToolbar: true,
+    snapToGrid: false,
   },
   contextCreateAt: null,
+  clipboard: null,
 };
 
 const LINK_SCHEMA = [
@@ -163,7 +175,7 @@ const BUILT_IN_SCENARIOS = {
     version: SCENARIO_VERSION,
     day: 0,
     globalPythonCode: '',
-    ui: { showLinkLabels: false, allowWarehouseToWarehouse: false, allowPlantOutbound: false, showCreateToolbar: true },
+    ui: { showLinkLabels: false, allowWarehouseToWarehouse: false, allowPlantOutbound: false, showCreateToolbar: true, snapToGrid: false },
     nodes: [],
     links: [],
   },
@@ -171,7 +183,7 @@ const BUILT_IN_SCENARIOS = {
     version: SCENARIO_VERSION,
     day: 0,
     globalPythonCode: '',
-    ui: { showLinkLabels: true, allowWarehouseToWarehouse: false, allowPlantOutbound: false, showCreateToolbar: true },
+    ui: { showLinkLabels: true, allowWarehouseToWarehouse: false, allowPlantOutbound: false, showCreateToolbar: true, snapToGrid: false },
     nodes: [
       {
         id: 'node-1',
@@ -224,13 +236,14 @@ function createNodeData(type) {
 }
 
 function addNode(type, x = 80 + state.nodes.length * 40, y = 60 + state.nodes.length * 30) {
+  const position = snapPosition(x, y);
   const data = createNodeData(type);
   const id = `node-${state.nodeCounter++}`;
   const node = {
     id,
     type,
-    x,
-    y,
+    x: position.x,
+    y: position.y,
     z: state.zCounter++,
     ...data,
     inventory: resolveInitialInventory(type, data),
@@ -591,8 +604,9 @@ function onNodeDrag(e) {
   state.drag.starts.forEach((start) => {
     const node = getNode(start.id);
     if (!node) return;
-    node.x = Math.max(16, start.x + dx);
-    node.y = Math.max(16, start.y + dy);
+    const next = snapPosition(start.x + dx, start.y + dy);
+    node.x = Math.max(16, next.x);
+    node.y = Math.max(16, next.y);
     applyNodeStyles(node);
   });
   drawLinks();
@@ -626,8 +640,15 @@ function stopPan() {
 
 function startBoxSelection(e) {
   const start = screenToWorld(e.clientX, e.clientY);
-  state.boxSelection = { pointerId: e.pointerId, start, current: start };
-  selectNodes([]);
+  const additive = e.shiftKey || e.ctrlKey || e.metaKey;
+  state.boxSelection = {
+    pointerId: e.pointerId,
+    start,
+    current: start,
+    additive,
+    initialSelected: additive ? [...state.selectedNodeIds] : [],
+  };
+  if (!additive) selectNodes([]);
   selectionBox.classList.remove('hidden');
   updateSelectionBox();
   window.addEventListener('pointermove', onBoxSelectionMove);
@@ -644,7 +665,10 @@ function onBoxSelectionMove(e) {
     const rect = nodeRect(node);
     return rect.x2 >= bounds.x1 && rect.x1 <= bounds.x2 && rect.y2 >= bounds.y1 && rect.y1 <= bounds.y2;
   }).map((node) => node.id);
-  selectNodes(hits, { keepLinks: false });
+  const nextSelection = state.boxSelection.additive
+    ? [...new Set([...state.boxSelection.initialSelected, ...hits])]
+    : hits;
+  selectNodes(nextSelection, { keepLinks: false });
 }
 
 function stopBoxSelection() {
@@ -1281,6 +1305,7 @@ function migrateScenario(rawScenario) {
       allowWarehouseToWarehouse: Boolean(migrated.ui?.allowWarehouseToWarehouse),
       allowPlantOutbound: Boolean(migrated.ui?.allowPlantOutbound),
       showCreateToolbar: true,
+      snapToGrid: false,
     };
   }
 
@@ -1289,6 +1314,7 @@ function migrateScenario(rawScenario) {
     allowWarehouseToWarehouse: Boolean(migrated.ui?.allowWarehouseToWarehouse),
     allowPlantOutbound: Boolean(migrated.ui?.allowPlantOutbound),
     showCreateToolbar: migrated.ui?.showCreateToolbar !== false,
+    snapToGrid: Boolean(migrated.ui?.snapToGrid),
   };
 
   migrated.version = SCENARIO_VERSION;
@@ -1308,6 +1334,7 @@ function importScenarioObject(rawScenario, options = {}) {
   state.ui.allowWarehouseToWarehouse = Boolean(scenario.ui?.allowWarehouseToWarehouse);
   state.ui.allowPlantOutbound = Boolean(scenario.ui?.allowPlantOutbound);
   state.ui.showCreateToolbar = scenario.ui?.showCreateToolbar !== false;
+  state.ui.snapToGrid = Boolean(scenario.ui?.snapToGrid);
 
   nodesInput.forEach((rawNode, idx) => {
     if (!rawNode || typeof rawNode !== 'object') return;
@@ -1370,6 +1397,7 @@ function importScenarioObject(rawScenario, options = {}) {
   allowWarehouseToWarehouseInput.checked = state.ui.allowWarehouseToWarehouse;
   allowPlantOutboundInput.checked = state.ui.allowPlantOutbound;
   setCreateToolbarVisibility(state.ui.showCreateToolbar);
+  setSnapToGrid(state.ui.snapToGrid);
 
   validateAll();
   initializeSimulationTracking();
@@ -1722,40 +1750,107 @@ function deleteSelected() {
 }
 
 function duplicateSelected() {
-  if (!state.selectedNodeIds.length) return;
-  const originalNodes = state.selectedNodeIds.map(getNode).filter(Boolean);
-  if (!originalNodes.length) return;
+  copySelectedNodes();
+  pasteClipboard({ dx: 36, dy: 36, renameAsCopy: true });
+}
 
+function copySelectedNodes() {
+  const selectedNodes = getSelectedNodes();
+  if (!selectedNodes.length) return false;
+  const selectedNodeIds = new Set(selectedNodes.map((node) => node.id));
+  const minX = Math.min(...selectedNodes.map((node) => node.x));
+  const minY = Math.min(...selectedNodes.map((node) => node.y));
+  const links = state.links.filter((link) => selectedNodeIds.has(link.from) && selectedNodeIds.has(link.to));
+  state.clipboard = {
+    nodes: selectedNodes.map((node) => ({
+      node: structuredClone(node),
+      offsetX: node.x - minX,
+      offsetY: node.y - minY,
+    })),
+    links: links.map((link) => structuredClone(link)),
+  };
+  log(`Copied ${selectedNodes.length} node${selectedNodes.length > 1 ? 's' : ''}`);
+  return true;
+}
+
+function pasteClipboard(options = {}) {
+  if (!state.clipboard?.nodes?.length) return false;
+  const dx = Number(options.dx ?? 32);
+  const dy = Number(options.dy ?? 32);
+  const renameAsCopy = Boolean(options.renameAsCopy);
   const cloneMap = new Map();
-  const duplicates = originalNodes.map((node, idx) => {
+  const pastedNodeIds = state.clipboard.nodes.map((entry, idx) => {
     const id = `node-${state.nodeCounter++}`;
-    const copy = structuredClone(node);
+    const copy = structuredClone(entry.node);
+    const next = snapPosition(entry.node.x + dx, entry.node.y + dy);
     copy.id = id;
-    copy.name = `${node.name} Copy`;
-    copy.x = node.x + 36 + idx * 8;
-    copy.y = node.y + 36 + idx * 8;
+    if (renameAsCopy) copy.name = `${entry.node.name} Copy`;
+    copy.x = Math.max(16, next.x);
+    copy.y = Math.max(16, next.y);
     copy.z = state.zCounter++;
     copy.initial = structuredClone(copy.initial);
-    cloneMap.set(node.id, id);
+    copy.validationErrors = {};
+    cloneMap.set(entry.node.id, id);
     state.nodes.push(copy);
     renderNode(copy);
     return copy.id;
   });
 
-  state.links.filter((link) => cloneMap.has(link.from) && cloneMap.has(link.to)).forEach((link) => {
+  state.clipboard.links.forEach((link) => {
+    const from = cloneMap.get(link.from);
+    const to = cloneMap.get(link.to);
+    if (!from || !to) return;
     state.links.push({
       ...structuredClone(link),
       id: `link-${state.linkCounter++}`,
-      from: cloneMap.get(link.from),
-      to: cloneMap.get(link.to),
+      from,
+      to,
       validationErrors: {},
     });
   });
 
   validateAll();
-  selectNodes(duplicates);
+  selectNodes(pastedNodeIds);
   drawLinks();
-  log(`Duplicated ${duplicates.length} node${duplicates.length > 1 ? 's' : ''}`);
+  log(`Pasted ${pastedNodeIds.length} node${pastedNodeIds.length > 1 ? 's' : ''}`);
+  return true;
+}
+
+function alignSelected(axis, edge) {
+  const nodes = getSelectedNodes();
+  if (nodes.length < 2) return;
+  const values = nodes.map((node) => (axis === 'x' ? (edge === 'start' ? node.x : nodeRect(node).x2) : (edge === 'start' ? node.y : nodeRect(node).y2)));
+  const target = edge === 'start' ? Math.min(...values) : Math.max(...values);
+  nodes.forEach((node) => {
+    if (axis === 'x') {
+      const x = edge === 'start' ? target : target - (nodeRect(node).x2 - node.x);
+      node.x = Math.max(16, snapPosition(x, node.y).x);
+    } else {
+      const y = edge === 'start' ? target : target - (nodeRect(node).y2 - node.y);
+      node.y = Math.max(16, snapPosition(node.x, y).y);
+    }
+    applyNodeStyles(node);
+  });
+  drawLinks();
+}
+
+function distributeSelected(axis) {
+  const nodes = getSelectedNodes();
+  if (nodes.length < 3) return;
+  const sorted = [...nodes].sort((a, b) => (axis === 'x' ? a.x - b.x : a.y - b.y));
+  const first = axis === 'x' ? sorted[0].x : sorted[0].y;
+  const last = axis === 'x' ? sorted[sorted.length - 1].x : sorted[sorted.length - 1].y;
+  const step = (last - first) / (sorted.length - 1);
+  sorted.forEach((node, idx) => {
+    if (idx === 0 || idx === sorted.length - 1) return;
+    if (axis === 'x') {
+      node.x = Math.max(16, snapPosition(first + step * idx, node.y).x);
+    } else {
+      node.y = Math.max(16, snapPosition(node.x, first + step * idx).y);
+    }
+    applyNodeStyles(node);
+  });
+  drawLinks();
 }
 
 function fitToGraph() {
@@ -1822,12 +1917,31 @@ function normalizedBounds(a, b) {
 
 function clamp(value, min, max) { return Math.max(min, Math.min(max, value)); }
 
+function snapValue(value) {
+  return Math.round(value / GRID_SIZE) * GRID_SIZE;
+}
+
+function snapPosition(x, y) {
+  if (!state.ui.snapToGrid) return { x, y };
+  return { x: snapValue(x), y: snapValue(y) };
+}
+
+function getSelectedNodes() {
+  return state.selectedNodeIds.map(getNode).filter(Boolean);
+}
+
 function setCreateToolbarVisibility(show) {
   state.ui.showCreateToolbar = !!show;
   nodeCreateToolbar?.classList.toggle('hidden', !state.ui.showCreateToolbar);
   if (toggleCreateToolbarBtn) {
     toggleCreateToolbarBtn.textContent = state.ui.showCreateToolbar ? 'Hide quick add' : 'Quick add';
   }
+}
+
+function setSnapToGrid(enabled) {
+  state.ui.snapToGrid = Boolean(enabled);
+  workspace.classList.toggle('grid-minimal', !state.ui.snapToGrid);
+  if (snapToGridInput) snapToGridInput.checked = state.ui.snapToGrid;
 }
 
 function updateContextMenuFilter() {
@@ -2015,6 +2129,24 @@ window.addEventListener('keydown', (e) => {
     return;
   }
 
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c' && !inInput) {
+    e.preventDefault();
+    copySelectedNodes();
+    return;
+  }
+
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v' && !inInput) {
+    e.preventDefault();
+    pasteClipboard();
+    return;
+  }
+
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a' && !inInput) {
+    e.preventDefault();
+    selectNodes(state.nodes.map((node) => node.id));
+    return;
+  }
+
   if (!inInput && e.key.toLowerCase() === 'f') {
     e.preventDefault();
     fitToGraph();
@@ -2052,6 +2184,18 @@ if (toggleCreateToolbarBtn) {
     persistScenarioToLocalStorage();
   });
 }
+copySelectionBtn?.addEventListener('click', copySelectedNodes);
+pasteSelectionBtn?.addEventListener('click', () => pasteClipboard());
+alignLeftBtn?.addEventListener('click', () => alignSelected('x', 'start'));
+alignRightBtn?.addEventListener('click', () => alignSelected('x', 'end'));
+alignTopBtn?.addEventListener('click', () => alignSelected('y', 'start'));
+alignBottomBtn?.addEventListener('click', () => alignSelected('y', 'end'));
+distributeHorizontalBtn?.addEventListener('click', () => distributeSelected('x'));
+distributeVerticalBtn?.addEventListener('click', () => distributeSelected('y'));
+snapToGridInput?.addEventListener('change', (e) => {
+  setSnapToGrid(e.target.checked);
+  persistScenarioToLocalStorage();
+});
 if (canvasContextActions) {
   canvasContextActions.querySelectorAll('.context-action').forEach((button) => {
     button.addEventListener('click', (e) => {
@@ -2155,6 +2299,7 @@ globalPythonCodeEl.addEventListener('input', (e) => {
   persistScenarioToLocalStorage();
 });
 state.globalPythonCode = globalPythonCodeEl.value;
+setSnapToGrid(state.ui.snapToGrid);
 if (showLinkLabelsInput) {
   showLinkLabelsInput.checked = state.ui.showLinkLabels;
   showLinkLabelsInput.addEventListener('change', (e) => {
