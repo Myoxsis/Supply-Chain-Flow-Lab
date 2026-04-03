@@ -1,11 +1,14 @@
 {
-  "version": 3,
+  "version": 5,
   "day": 0,
+  "description": "Balanced 30-day demo: steady inbound flow, warehouse congestion from bursty replenishment, and one early stockout risk before stabilization.",
   "globalPythonCode": "",
   "ui": {
     "showLinkLabels": true,
     "allowWarehouseToWarehouse": false,
-    "allowPlantOutbound": false
+    "allowPlantOutbound": false,
+    "showCreateToolbar": true,
+    "snapToGrid": false
   },
   "nodes": [
     {
@@ -15,9 +18,10 @@
       "config": {
         "name": "Supplier North",
         "deliveryFrequencyDays": 2,
-        "deliveryQuantity": 140,
+        "deliveryQuantity": 170,
         "leadTimeDays": 1,
-        "initialInventory": null
+        "initialInventory": null,
+        "shipmentCost": 35
       }
     },
     {
@@ -26,10 +30,11 @@
       "position": { "x": 90, "y": 260 },
       "config": {
         "name": "Supplier South",
-        "deliveryFrequencyDays": 3,
-        "deliveryQuantity": 110,
+        "deliveryFrequencyDays": 5,
+        "deliveryQuantity": 280,
         "leadTimeDays": 2,
-        "initialInventory": null
+        "initialInventory": null,
+        "shipmentCost": 48
       }
     },
     {
@@ -39,10 +44,13 @@
       "config": {
         "name": "Central Warehouse",
         "preparationTimeDays": 1,
-        "deliveryToPlantDays": 2,
-        "storageCapacity": 900,
-        "initialInventory": 220,
-        "reorderPoint": 300
+        "preparationCapacityPerDay": 85,
+        "deliveryToPlantDays": 1,
+        "storageCapacity": 460,
+        "initialInventory": 260,
+        "reorderPoint": 280,
+        "handlingCostPerUnit": 0.2,
+        "storageCostPerUnitPerDay": 0.035
       }
     },
     {
@@ -51,9 +59,10 @@
       "position": { "x": 790, "y": 100 },
       "config": {
         "name": "Plant Alpha",
-        "consumptionRatePerDay": 35,
-        "initialInventory": 140,
-        "safetyStock": 70
+        "consumptionRatePerDay": 43,
+        "initialInventory": 250,
+        "safetyStock": 150,
+        "stockoutPenaltyPerUnit": 7
       }
     },
     {
@@ -62,9 +71,10 @@
       "position": { "x": 790, "y": 290 },
       "config": {
         "name": "Plant Beta",
-        "consumptionRatePerDay": 28,
-        "initialInventory": 120,
-        "safetyStock": 60
+        "consumptionRatePerDay": 30,
+        "initialInventory": 80,
+        "safetyStock": 95,
+        "stockoutPenaltyPerUnit": 8
       }
     }
   ],
@@ -75,9 +85,9 @@
       "to": "node-3",
       "materialName": "Alloy A",
       "transportDelayDays": 1,
-      "maxDailyCapacity": 160,
+      "maxDailyCapacity": 180,
       "priority": 1,
-      "costPerShipment": 40
+      "costPerShipment": 58
     },
     {
       "id": "link-2",
@@ -85,29 +95,29 @@
       "to": "node-3",
       "materialName": "Polymer B",
       "transportDelayDays": 2,
-      "maxDailyCapacity": 130,
+      "maxDailyCapacity": 280,
       "priority": 1,
-      "costPerShipment": 45
+      "costPerShipment": 72
     },
     {
       "id": "link-3",
       "from": "node-3",
       "to": "node-4",
       "materialName": "Component Kit",
-      "transportDelayDays": 2,
-      "maxDailyCapacity": 120,
+      "transportDelayDays": 1,
+      "maxDailyCapacity": 68,
       "priority": 1,
-      "costPerShipment": 65
+      "costPerShipment": 64
     },
     {
       "id": "link-4",
       "from": "node-3",
       "to": "node-5",
       "materialName": "Component Kit",
-      "transportDelayDays": 2,
-      "maxDailyCapacity": 120,
+      "transportDelayDays": 1,
+      "maxDailyCapacity": 62,
       "priority": 1,
-      "costPerShipment": 65
+      "costPerShipment": 62
     }
   ]
 }

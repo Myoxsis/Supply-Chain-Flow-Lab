@@ -38,6 +38,7 @@ const allowWarehouseToWarehouseInput = document.getElementById('allowWarehouseTo
 const allowPlantOutboundInput = document.getElementById('allowPlantOutbound');
 const snapToGridInput = document.getElementById('snapToGrid');
 const scenarioPresetSelect = document.getElementById('scenarioPreset');
+const scenarioDescriptionEl = document.getElementById('scenarioDescription');
 const loadPresetBtn = document.getElementById('loadPresetBtn');
 const resetScenarioBtn = document.getElementById('resetScenarioBtn');
 const exportScenarioBtn = document.getElementById('exportScenarioBtn');
@@ -64,6 +65,16 @@ selectionBox.className = 'selection-box hidden';
 workspace.appendChild(selectionBox);
 
 const state = createInitialState();
+
+function getScenarioDescriptionText(rawDescription) {
+  const text = typeof rawDescription === 'string' ? rawDescription.trim() : '';
+  return text || 'No scenario notes provided.';
+}
+
+function renderScenarioDescription(rawDescription) {
+  if (!scenarioDescriptionEl) return;
+  scenarioDescriptionEl.textContent = getScenarioDescriptionText(rawDescription);
+}
 
 function createNodeData(type) {
   return createNodeDataModel(type, state.nodeCounter);
@@ -1389,6 +1400,8 @@ function importScenarioObject(rawScenario, options = {}) {
 
   clearGraph();
   state.day = Number.isInteger(scenario.day) && scenario.day >= 0 ? scenario.day : 0;
+  state.scenarioDescription = getScenarioDescriptionText(scenario.description);
+  renderScenarioDescription(state.scenarioDescription);
   state.globalPythonCode = typeof scenario.globalPythonCode === 'string' ? scenario.globalPythonCode : '';
   globalPythonCodeEl.value = state.globalPythonCode;
   state.ui.showLinkLabels = Boolean(scenario.ui?.showLinkLabels);
@@ -1480,6 +1493,7 @@ function serializeGraph() {
   return {
     version: SCENARIO_VERSION,
     day: state.day,
+    description: state.scenarioDescription,
     globalPythonCode: state.globalPythonCode,
     ui: structuredClone(state.ui),
     nodes: state.nodes.map((node) => {
@@ -2440,6 +2454,12 @@ if (loadPresetBtn) {
     persistScenarioToLocalStorage();
   });
 }
+if (scenarioPresetSelect) {
+  scenarioPresetSelect.addEventListener('change', (e) => {
+    const preset = e.target.value;
+    renderScenarioDescription(BUILT_IN_SCENARIOS[preset]?.description);
+  });
+}
 if (resetScenarioBtn) {
   resetScenarioBtn.addEventListener('click', () => {
     importScenarioObject(structuredClone(BUILT_IN_SCENARIOS.blank), { logMessage: 'Scenario reset to blank' });
@@ -2509,6 +2529,7 @@ globalPythonCodeEl.addEventListener('input', (e) => {
 });
 state.globalPythonCode = globalPythonCodeEl.value;
 setSnapToGrid(state.ui.snapToGrid);
+renderScenarioDescription(BUILT_IN_SCENARIOS[scenarioPresetSelect?.value ?? 'demo']?.description);
 if (showLinkLabelsInput) {
   showLinkLabelsInput.checked = state.ui.showLinkLabels;
   showLinkLabelsInput.addEventListener('change', (e) => {
