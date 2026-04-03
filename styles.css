@@ -18,23 +18,60 @@
 html, body { height: 100%; margin: 0; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: var(--bg); color: var(--text); }
 button, input { font: inherit; }
 textarea, select { font: inherit; }
+.material-symbols-rounded { font-size: 18px; line-height: 1; }
 body { overflow: hidden; }
 body.space-pan .workspace { cursor: grab; }
-.app-shell { display: grid; grid-template-columns: 320px 1fr; height: 100vh; gap: 0; }
+.app-shell { display: grid; grid-template-columns: 76px 1fr; height: 100vh; gap: 0; }
+.app-shell.nav-open { grid-template-columns: 368px 1fr; }
 .sidebar {
   background: linear-gradient(180deg, #10141c 0%, #0d1118 100%);
   border-right: 1px solid var(--border);
-  padding: 16px;
-  overflow: auto;
+  overflow: hidden;
+  display: grid;
+  grid-template-columns: 76px 1fr;
 }
-.brand { display: flex; gap: 12px; align-items: center; margin-bottom: 14px; }
+.sidebar-rail {
+  padding: 14px 10px;
+  border-right: 1px solid rgba(255, 255, 255, 0.04);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.sidebar-content {
+  padding: 16px 14px;
+  overflow: auto;
+  opacity: 1;
+  transform: translateX(0);
+  transition: opacity .2s ease, transform .2s ease;
+}
+.sidebar.collapsed .sidebar-content {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-10px);
+}
 .brand-mark {
   width: 42px; height: 42px; border-radius: 12px; display: grid; place-items: center;
   background: linear-gradient(135deg, rgba(99,227,160,.24), rgba(99,227,160,.05));
   border: 1px solid rgba(99,227,160,.35); color: var(--accent); font-weight: 800;
 }
-.brand h1 { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: .01em; }
-.brand p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+.brand-icon-btn {
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  overflow: hidden;
+}
+.sidebar.collapsed .nav-item span:last-child { display: none; }
+.nav-item.active {
+  border-color: rgba(99,227,160,.55);
+}
+.nav-panel { display: none; }
+.nav-panel.active { display: block; }
 .panel {
   background: rgba(255,255,255,.015); border: 1px solid var(--border); border-radius: 14px;
   padding: 12px; margin-bottom: 10px; box-shadow: inset 0 1px 0 rgba(255,255,255,.03);
@@ -172,6 +209,31 @@ input[type="range"] { width: 100%; margin-top: 8px; }
     radial-gradient(circle at top, rgba(99,227,160,.07), transparent 45%),
     #0d1219;
   background-size: 96px 96px, 96px 96px, auto, auto;
+}
+.sim-controls-overlay {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 7300;
+  width: 230px;
+  padding: 10px;
+  border-radius: 12px;
+  border: 1px solid #3f4d66;
+  background: rgba(13, 20, 30, 0.9);
+  backdrop-filter: blur(8px);
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 8px;
+}
+.sim-controls-overlay button {
+  padding: 6px 8px;
+  display: grid;
+  place-items: center;
+}
+.sim-controls-overlay label,
+.sim-controls-overlay .sim-status-row,
+.sim-controls-overlay .stats-row {
+  grid-column: 1 / -1;
 }
 .node-create-toolbar {
   position: absolute;
@@ -334,6 +396,29 @@ input[type="range"] { width: 100%; margin-top: 8px; }
   position: absolute; padding: 6px 10px; background: #1f2530; border: 1px solid var(--border);
   border-radius: 999px; font-size: 12px; color: var(--muted); pointer-events: none;
 }
+.link-inspector-tooltip {
+  position: absolute;
+  z-index: 7600;
+  width: 280px;
+  max-width: 280px;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid #42516c;
+  background: rgba(18, 24, 36, 0.97);
+  box-shadow: 0 20px 38px rgba(0,0,0,.42);
+}
+.link-inspector-tooltip::before {
+  content: "";
+  position: absolute;
+  top: -8px;
+  left: 22px;
+  width: 14px;
+  height: 14px;
+  transform: rotate(45deg);
+  background: rgba(18, 24, 36, 0.97);
+  border-left: 1px solid #42516c;
+  border-top: 1px solid #42516c;
+}
 .selection-box {
   position: absolute;
   border: 1px solid rgba(120, 180, 255, .8);
@@ -475,10 +560,12 @@ input[type="range"] { width: 100%; margin-top: 8px; }
   gap: 8px;
 }
 @media (max-width: 1100px) {
-  .app-shell { grid-template-columns: 300px 1fr; }
+  .app-shell { grid-template-columns: 72px 1fr; }
+  .app-shell.nav-open { grid-template-columns: 320px 1fr; }
   .node-card { width: 240px; }
   .kpi-bar { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .chart-grid { grid-template-columns: 1fr; }
+  .sim-controls-overlay { width: 210px; }
 }
 
 .field.invalid input {
