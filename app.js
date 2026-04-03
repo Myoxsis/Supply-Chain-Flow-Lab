@@ -14,6 +14,7 @@ import {
 import { createSimulationEngine } from './src/simulation-engine.js';
 import { BUILT_IN_SCENARIOS, GRID_SIZE, MAX_ZOOM, MIN_ZOOM, SCENARIO_STORAGE_KEY, createInitialState } from './src/app-state.js';
 import { verifyScenarioChecksum, withScenarioMeta } from './src/scenario-io.js';
+import { cloneValue } from './src/clone.js';
 
 const workspace = document.getElementById('workspace');
 const linksSvg = document.getElementById('linksSvg');
@@ -98,7 +99,7 @@ function addNode(type, x = 80 + state.nodes.length * 40, y = 60 + state.nodes.le
     shipped: 0,
     stockouts: 0,
     lastMissedShipmentDay: null,
-    initial: structuredClone(data),
+    initial: cloneValue(data),
     validationErrors: {},
   };
   initializeNodeRuntime(node);
@@ -1260,14 +1261,14 @@ function buildSimulationOutput() {
         preparingVolume: (warehouse.preparingShipments ?? []).reduce((sum, prep) => sum + prep.qty, 0),
       })),
     },
-    eventLog: structuredClone(state.eventLog),
-    inventoryTimeSeriesByNode: structuredClone(state.inventoryHistoryByNode),
-    shipmentsInTransitHistory: structuredClone(state.transitHistory),
-    kpiSummary: structuredClone(state.kpis),
+    eventLog: cloneValue(state.eventLog),
+    inventoryTimeSeriesByNode: cloneValue(state.inventoryHistoryByNode),
+    shipmentsInTransitHistory: cloneValue(state.transitHistory),
+    kpiSummary: cloneValue(state.kpis),
     costSummary: {
       totalCost: state.kpis.totalCost,
-      costBreakdown: structuredClone(state.kpis.costBreakdown),
-      costPerPlantServed: structuredClone(state.kpis.costPerPlantServed),
+      costBreakdown: cloneValue(state.kpis.costBreakdown),
+      costPerPlantServed: cloneValue(state.kpis.costPerPlantServed),
       costByNode: Object.fromEntries(
         Object.entries(state.finance.costByNode).map(([nodeId, bucket]) => [nodeId, {
           nodeName: getNode(nodeId)?.name ?? bucket.nodeName,
@@ -1362,7 +1363,7 @@ function resetSimulation() {
   state.day = 0;
   state.shipments = [];
   state.nodes.forEach((node) => {
-    Object.assign(node, structuredClone(node.initial));
+    Object.assign(node, cloneValue(node.initial));
     node.inventory = resolveInitialInventory(node.type, node);
     node.received = 0;
     node.shipped = 0;
@@ -1447,7 +1448,7 @@ function importScenarioObject(rawScenario, options = {}) {
       shipped: 0,
       stockouts: 0,
       lastMissedShipmentDay: null,
-      initial: structuredClone(config),
+      initial: cloneValue(config),
       validationErrors: {},
     };
     initializeNodeRuntime(node);
@@ -1518,7 +1519,7 @@ function serializeGraph() {
     day: state.day,
     description: state.scenarioDescription,
     globalPythonCode: state.globalPythonCode,
-    ui: structuredClone(state.ui),
+    ui: cloneValue(state.ui),
     nodes: state.nodes.map((node) => {
       const schemaKeys = NODE_SCHEMAS[node.type].fields.map((f) => f.key);
       const config = schemaKeys.reduce((acc, key) => {
@@ -1978,11 +1979,11 @@ function copySelectedNodes() {
   const links = state.links.filter((link) => selectedNodeIds.has(link.from) && selectedNodeIds.has(link.to));
   state.clipboard = {
     nodes: selectedNodes.map((node) => ({
-      node: structuredClone(node),
+      node: cloneValue(node),
       offsetX: node.x - minX,
       offsetY: node.y - minY,
     })),
-    links: links.map((link) => structuredClone(link)),
+    links: links.map((link) => cloneValue(link)),
   };
   log(`Copied ${selectedNodes.length} node${selectedNodes.length > 1 ? 's' : ''}`);
   return true;
@@ -1996,14 +1997,14 @@ function pasteClipboard(options = {}) {
   const cloneMap = new Map();
   const pastedNodeIds = state.clipboard.nodes.map((entry, idx) => {
     const id = `node-${state.nodeCounter++}`;
-    const copy = structuredClone(entry.node);
+    const copy = cloneValue(entry.node);
     const next = snapPosition(entry.node.x + dx, entry.node.y + dy);
     copy.id = id;
     if (renameAsCopy) copy.name = `${entry.node.name} Copy`;
     copy.x = Math.max(16, next.x);
     copy.y = Math.max(16, next.y);
     copy.z = state.zCounter++;
-    copy.initial = structuredClone(copy.initial);
+    copy.initial = cloneValue(copy.initial);
     copy.validationErrors = {};
     cloneMap.set(entry.node.id, id);
     state.nodes.push(copy);
@@ -2016,7 +2017,7 @@ function pasteClipboard(options = {}) {
     const to = cloneMap.get(link.to);
     if (!from || !to) return;
     state.links.push({
-      ...structuredClone(link),
+      ...cloneValue(link),
       id: `link-${state.linkCounter++}`,
       from,
       to,
@@ -2508,7 +2509,7 @@ if (loadPresetBtn) {
   loadPresetBtn.addEventListener('click', () => {
     const preset = scenarioPresetSelect?.value ?? 'blank';
     if (!BUILT_IN_SCENARIOS[preset]) return;
-    importScenarioObject(structuredClone(BUILT_IN_SCENARIOS[preset]), { logMessage: `${preset === 'demo' ? 'Demo' : 'Blank'} scenario loaded` });
+    importScenarioObject(cloneValue(BUILT_IN_SCENARIOS[preset]), { logMessage: `${preset === 'demo' ? 'Demo' : 'Blank'} scenario loaded` });
     persistScenarioToLocalStorage();
   });
 }
@@ -2520,7 +2521,7 @@ if (scenarioPresetSelect) {
 }
 if (resetScenarioBtn) {
   resetScenarioBtn.addEventListener('click', () => {
-    importScenarioObject(structuredClone(BUILT_IN_SCENARIOS.blank), { logMessage: 'Scenario reset to blank' });
+    importScenarioObject(cloneValue(BUILT_IN_SCENARIOS.blank), { logMessage: 'Scenario reset to blank' });
     persistScenarioToLocalStorage();
   });
 }
@@ -2618,7 +2619,7 @@ if (allowPlantOutboundInput) {
 }
 startScenarioAutosave();
 if (!loadScenarioFromLocalStorage()) {
-  importScenarioObject(structuredClone(BUILT_IN_SCENARIOS.demo), { logMessage: 'Built-in demo scenario loaded' });
+  importScenarioObject(cloneValue(BUILT_IN_SCENARIOS.demo), { logMessage: 'Built-in demo scenario loaded' });
   persistScenarioToLocalStorage();
 }
 
@@ -2626,8 +2627,8 @@ window.SupplyChainFlowLab = {
   serializeGraph,
   importScenarioObject,
   migrateScenario,
-  loadBuiltInScenario: (name) => importScenarioObject(structuredClone(BUILT_IN_SCENARIOS[name] ?? BUILT_IN_SCENARIOS.blank)),
-  getState: () => structuredClone({ nodes: state.nodes, links: state.links, graphErrors: state.graphErrors, globalPythonCode: state.globalPythonCode }),
+  loadBuiltInScenario: (name) => importScenarioObject(cloneValue(BUILT_IN_SCENARIOS[name] ?? BUILT_IN_SCENARIOS.blank)),
+  getState: () => cloneValue({ nodes: state.nodes, links: state.links, graphErrors: state.graphErrors, globalPythonCode: state.globalPythonCode }),
   stepSimulation,
   simulateDays,
   getSimulationOutput: buildSimulationOutput,
