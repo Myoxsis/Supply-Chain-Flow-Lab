@@ -42,6 +42,24 @@ body.space-pan .workspace { cursor: grab; }
 .panel h2, .log-header h3 { margin: 0 0 10px; font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: #b9c4d8; }
 .button-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .sim-grid { grid-template-columns: 1fr 1fr; }
+.sim-status-row {
+  margin-top: 10px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.range-with-value {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: center;
+}
+#tickSpeedValue {
+  font-size: 12px;
+  color: #d7e7ff;
+  min-width: 72px;
+  text-align: right;
+}
 .scenario-grid { margin-top: 10px; }
 button {
   background: linear-gradient(180deg, #263040, #1c2431); color: var(--text); border: 1px solid #344156;

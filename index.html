@@ -55,18 +55,26 @@ def clamp(value, min_value, max_value):
       <section class="panel">
         <h2>Simulation</h2>
         <div class="button-grid sim-grid">
-          <button id="stepBtn">Step +1 day</button>
-          <button id="playBtn">Auto Play</button>
+          <button id="startBtn">Start simulation</button>
           <button id="pauseBtn" class="ghost">Pause</button>
-          <button id="resetBtn" class="ghost">Reset</button>
+          <button id="resumeBtn">Resume</button>
+          <button id="stepBtn" class="ghost">Step one day</button>
+          <button id="resetBtn" class="ghost">Reset simulation</button>
+        </div>
+        <div class="sim-status-row">
+          <span class="meta-label">Status</span>
+          <strong id="simStatusValue">Idle</strong>
         </div>
         <label>
-          Tick speed
-          <input id="tickSpeed" type="range" min="200" max="1500" step="100" value="800" />
+          Speed
+          <div class="range-with-value">
+            <input id="tickSpeed" type="range" min="120" max="1500" step="20" value="800" />
+            <span id="tickSpeedValue">800 ms/day</span>
+          </div>
         </label>
         <div class="stats-row">
           <div>
-            <span class="meta-label">Day</span>
+            <span class="meta-label">Current simulated day</span>
             <strong id="dayValue">0</strong>
           </div>
           <div>
