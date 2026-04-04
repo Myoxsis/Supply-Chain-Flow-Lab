@@ -2104,15 +2104,42 @@ function getPrimaryAnalyticsSource(analyticsNode) {
   return inputLink ? getNode(inputLink.from) : null;
 }
 
+function getShipmentsTodayForNode(sourceNode) {
+  if (!sourceNode) return state.shipmentsByDay.at(-1)?.count ?? 0;
+  return state.shipmentsByDayBySourceNode[sourceNode.id]?.at(-1)?.day === state.day
+    ? state.shipmentsByDayBySourceNode[sourceNode.id].at(-1).count
+    : 0;
+}
+
+function getAverageInventoryForNode(sourceNode) {
+  if (!sourceNode) return null;
+  const history = state.inventoryHistoryByNode[sourceNode.id] ?? [];
+  if (!history.length) return 0;
+  const total = history.reduce((sum, pt) => sum + (Number.isFinite(pt.inventory) ? pt.inventory : 0), 0);
+  return Number((total / history.length).toFixed(2));
+}
+
+function getAverageWarehouseUtilizationForNode(sourceNode) {
+  if (!sourceNode || sourceNode.type !== 'warehouse' || !sourceNode.storageCapacity) return null;
+  const history = state.inventoryHistoryByNode[sourceNode.id] ?? [];
+  if (!history.length) return 0;
+  const avgInventory = history.reduce((sum, pt) => sum + (Number.isFinite(pt.inventory) ? pt.inventory : 0), 0) / history.length;
+  return Number(((avgInventory / sourceNode.storageCapacity) * 100).toFixed(2));
+}
+
 function readMetricValue(analyticsNode) {
   const source = getPrimaryAnalyticsSource(analyticsNode);
   switch (analyticsNode.metric) {
     case 'stockout_count':
-      return state.kpis.stockoutCount;
+      return source ? source.stockouts : state.kpis.stockoutCount;
     case 'avg_plant_inventory':
-      return Math.round(state.kpis.averagePlantInventory);
+      if (!source) return Math.round(state.kpis.averagePlantInventory);
+      return source.type === 'plant' ? Math.round(getAverageInventoryForNode(source) ?? 0) : '—';
     case 'warehouse_utilization':
-      return `${Math.round(state.kpis.warehouseUtilization * 100)}%`;
+      if (!source) return `${Math.round(state.kpis.warehouseUtilization * 100)}%`;
+      return source.type === 'warehouse'
+        ? `${Math.round(getAverageWarehouseUtilizationForNode(source) ?? 0)}%`
+        : '—';
     case 'on_time_rate':
       return `${Math.round(state.kpis.onTimeDeliveries.rate * 100)}%`;
     case 'avg_queue_time':
@@ -2120,13 +2147,9 @@ function readMetricValue(analyticsNode) {
     case 'avg_fulfillment_delay':
       return `${state.kpis.averageFulfillmentDelayDays.toFixed(1)} d`;
     case 'total_shipped':
-      return state.kpis.totalShippedVolume;
+      return source ? source.shipped : state.kpis.totalShippedVolume;
     case 'shipments_today':
-      return source
-        ? (state.shipmentsByDayBySourceNode[source.id]?.at(-1)?.day === state.day
-          ? state.shipmentsByDayBySourceNode[source.id].at(-1).count
-          : 0)
-        : (state.shipmentsByDay.at(-1)?.count ?? 0);
+      return getShipmentsTodayForNode(source);
     case 'node_inventory':
       return source ? (Number.isFinite(source.inventory) ? source.inventory : '∞') : '—';
     case 'node_shipped':
@@ -2142,11 +2165,13 @@ function readMetricNumericValue(analyticsNode) {
   const source = getPrimaryAnalyticsSource(analyticsNode);
   switch (analyticsNode.metric) {
     case 'stockout_count':
-      return state.kpis.stockoutCount;
+      return source ? source.stockouts : state.kpis.stockoutCount;
     case 'avg_plant_inventory':
-      return state.kpis.averagePlantInventory;
+      if (!source) return state.kpis.averagePlantInventory;
+      return source.type === 'plant' ? (getAverageInventoryForNode(source) ?? 0) : null;
     case 'warehouse_utilization':
-      return Number((state.kpis.warehouseUtilization * 100).toFixed(2));
+      if (!source) return Number((state.kpis.warehouseUtilization * 100).toFixed(2));
+      return source.type === 'warehouse' ? getAverageWarehouseUtilizationForNode(source) : null;
     case 'on_time_rate':
       return Number((state.kpis.onTimeDeliveries.rate * 100).toFixed(2));
     case 'avg_queue_time':
@@ -2154,13 +2179,9 @@ function readMetricNumericValue(analyticsNode) {
     case 'avg_fulfillment_delay':
       return state.kpis.averageFulfillmentDelayDays;
     case 'total_shipped':
-      return state.kpis.totalShippedVolume;
+      return source ? source.shipped : state.kpis.totalShippedVolume;
     case 'shipments_today':
-      return source
-        ? (state.shipmentsByDayBySourceNode[source.id]?.at(-1)?.day === state.day
-          ? state.shipmentsByDayBySourceNode[source.id].at(-1).count
-          : 0)
-        : (state.shipmentsByDay.at(-1)?.count ?? 0);
+      return getShipmentsTodayForNode(source);
     case 'node_inventory':
       return source && Number.isFinite(source.inventory) ? source.inventory : null;
     case 'node_shipped':
