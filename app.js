@@ -496,7 +496,7 @@ function getNodeBody(node) {
     analytics: `
       <div class="kpis">
         <div class="kpi"><span class="label">Metric</span><span class="value" data-kpi="metric-value">${readMetricValue(node)}</span></div>
-        <div class="kpi"><span class="label">Trend points</span><span class="value" data-kpi="metric-points">${state.analyticsMetricHistoryByNode[node.id]?.length ?? 0}</span></div>
+        <div class="kpi"><span class="label">Trend points</span><span class="value" data-kpi="metric-points">${getAnalyticsMetricHistoryPoints(node).length}</span></div>
       </div>`,
   };
 
@@ -532,6 +532,9 @@ function bindFieldEvents(body, node) {
       }
       node[field] = value;
       node.initial[field] = value;
+      if (node.type === 'analytics' && (field === 'metric' || field === 'sourceNodeId')) {
+        resetAnalyticsMetricHistory(node.id);
+      }
       if (field === 'initialInventory') {
         node.inventory = resolveInitialInventory(node.type, node);
       }
@@ -1158,7 +1161,7 @@ function refreshSimulationNodeViews() {
     const metricValueEl = el.querySelector('[data-kpi="metric-value"]');
     if (metricValueEl) metricValueEl.textContent = readMetricValue(node);
     const metricPointsEl = el.querySelector('[data-kpi="metric-points"]');
-    if (metricPointsEl) metricPointsEl.textContent = state.analyticsMetricHistoryByNode[node.id]?.length ?? 0;
+    if (metricPointsEl) metricPointsEl.textContent = getAnalyticsMetricHistoryPoints(node).length;
   });
 }
 
@@ -1704,7 +1707,7 @@ function initializeSimulationTracking() {
       inventory: Number.isFinite(node.inventory) ? node.inventory : null,
       onHandLabel: Number.isFinite(node.inventory) ? node.inventory : '∞',
     }];
-    if (node.type === 'analytics') state.analyticsMetricHistoryByNode[node.id] = [];
+    if (node.type === 'analytics') state.analyticsMetricHistoryByNode[node.id] = { activeSignature: null, byContext: {} };
   });
   computeKpis();
   recordAnalyticsMetricHistory();
@@ -2260,10 +2263,52 @@ function readMetricNumericValue(analyticsNode) {
   }
 }
 
+function getAnalyticsContextSignature(analyticsNode) {
+  const source = getPrimaryAnalyticsSource(analyticsNode);
+  const resolvedSourceId = source?.id ?? 'none';
+  return `${analyticsNode.metric}|${resolvedSourceId}`;
+}
+
+function ensureAnalyticsMetricHistoryEntry(analyticsNode) {
+  const existing = state.analyticsMetricHistoryByNode[analyticsNode.id];
+  if (existing && typeof existing === 'object' && !Array.isArray(existing)) {
+    if (!existing.byContext || typeof existing.byContext !== 'object') existing.byContext = {};
+    if (typeof existing.activeSignature !== 'string' && existing.activeSignature !== null) existing.activeSignature = null;
+    return existing;
+  }
+
+  const migrated = { activeSignature: null, byContext: {} };
+  if (Array.isArray(existing) && existing.length) {
+    const signature = getAnalyticsContextSignature(analyticsNode);
+    migrated.activeSignature = signature;
+    migrated.byContext[signature] = existing
+      .filter((pt) => pt && Number.isFinite(pt.day) && Number.isFinite(pt.value))
+      .map((pt) => ({ day: pt.day, value: pt.value }));
+  }
+  state.analyticsMetricHistoryByNode[analyticsNode.id] = migrated;
+  return migrated;
+}
+
+function getAnalyticsMetricHistoryPoints(analyticsNode) {
+  const entry = ensureAnalyticsMetricHistoryEntry(analyticsNode);
+  const signature = getAnalyticsContextSignature(analyticsNode);
+  if (entry.activeSignature !== signature) entry.activeSignature = signature;
+  if (!Array.isArray(entry.byContext[signature])) entry.byContext[signature] = [];
+  return entry.byContext[signature];
+}
+
+function resetAnalyticsMetricHistory(nodeId) {
+  const node = getNode(nodeId);
+  if (!node || node.type !== 'analytics') return;
+  const entry = ensureAnalyticsMetricHistoryEntry(node);
+  const signature = getAnalyticsContextSignature(node);
+  entry.activeSignature = signature;
+  entry.byContext[signature] = [];
+}
+
 function recordAnalyticsMetricHistory() {
   state.nodes.filter((node) => node.type === 'analytics').forEach((node) => {
-    if (!state.analyticsMetricHistoryByNode[node.id]) state.analyticsMetricHistoryByNode[node.id] = [];
-    const bucket = state.analyticsMetricHistoryByNode[node.id];
+    const bucket = getAnalyticsMetricHistoryPoints(node);
     const value = readMetricNumericValue(node);
     if (!Number.isFinite(value)) return;
     const last = bucket.at(-1);
@@ -2281,7 +2326,7 @@ function renderAnalyticsNodeCharts() {
     if (!el) return;
     const svg = el.querySelector(`[data-analytics-chart="${node.id}"]`);
     if (!svg) return;
-    const points = (state.analyticsMetricHistoryByNode[node.id] ?? []).map((pt) => ({ x: pt.day, y: pt.value }));
+    const points = getAnalyticsMetricHistoryPoints(node).map((pt) => ({ x: pt.day, y: pt.value }));
     drawCompactNodeChart(svg, points);
   });
 }
