@@ -881,7 +881,8 @@ function tryCreateLink(fromId, toId, linkType = 'material') {
 
 function isValidLink(from, to, linkType = 'material') {
   const normalizedLinkType = linkType === 'information' ? 'information' : 'material';
-  const fromOutputs = getNodeSchema(from.type)?.outputs ?? [];
+  const fromOutputs = getNodeSchema(from.type)?.outputs
+    ?? (['supplier', 'warehouse', 'plant'].includes(from.type) ? ['material', 'information'] : ['information']);
   if (normalizedLinkType === 'information') {
     if (!fromOutputs.includes('information')) return false;
     return to.type === 'analytics' || to.type.startsWith('scfl_custom_');
