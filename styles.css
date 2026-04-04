@@ -10,6 +10,7 @@
   --accent-2: #45bf82;
   --danger: #ff7b8a;
   --supplier: #6fc2ff;
+  --material: #d7b3ff;
   --warehouse: #ffbd66;
   --plant: #8ee68b;
   --shadow: 0 16px 44px rgba(0, 0, 0, 0.45);
@@ -193,6 +194,7 @@ input[type="range"] { width: 100%; margin-top: 8px; }
 .legend span { display: flex; align-items: center; gap: 8px; }
 .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
 .dot.supplier { background: var(--supplier); }
+.dot.material { background: var(--material); }
 .dot.warehouse { background: var(--warehouse); }
 .dot.plant { background: var(--plant); }
 @media (max-width: 1280px) {
@@ -506,6 +508,7 @@ input[type="range"] { width: 100%; margin-top: 8px; }
 .log-entry { padding: 7px 8px; border-bottom: 1px solid rgba(255,255,255,.05); }
 .log-entry:last-child { border-bottom: none; }
 .node-card.type-supplier .node-type-chip { color: var(--supplier); background: rgba(111,194,255,.12); }
+.node-card.type-material .node-type-chip { color: var(--material); background: rgba(215,179,255,.16); }
 .node-card.type-warehouse .node-type-chip { color: var(--warehouse); background: rgba(255,189,102,.12); }
 .node-card.type-plant .node-type-chip { color: var(--plant); background: rgba(142,230,139,.12); }
 .node-card.type-analytics .node-type-chip { color: #d9a8ff; background: rgba(217,168,255,.14); }
