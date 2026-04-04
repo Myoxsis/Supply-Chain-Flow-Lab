@@ -54,7 +54,7 @@ const MIN_ZOOM = 0.35;
 const MAX_ZOOM = 2.5;
 const GRID_SIZE = 24;
 const SCENARIO_STORAGE_KEY = 'supply-chain-flow-lab:scenario';
-const SCENARIO_VERSION = 6;
+const SCENARIO_VERSION = 7;
 const API_BASE_OVERRIDE_KEY = 'supply-chain-flow-lab:api-base-url';
 const FALLBACK_FILE_API_ORIGIN = 'http://localhost:5000';
 
@@ -69,6 +69,13 @@ function resolveSimulationApiBase() {
 const SIM_API_BASE = resolveSimulationApiBase();
 
 const NODE_SCHEMAS = {
+  material: {
+    label: 'Material',
+    outputs: ['material', 'information'],
+    fields: [
+      { key: 'name', label: 'Name', type: 'string', required: true, defaultValue: (i) => `Material ${i}` },
+    ],
+  },
   supplier: {
     label: 'Supplier',
     fields: [
@@ -98,6 +105,7 @@ const NODE_SCHEMAS = {
       { key: 'consumptionRatePerDay', label: 'Consumption rate / day', type: 'int', required: true, min: 0, step: 1, defaultValue: 20 },
       { key: 'initialInventory', label: 'Initial inventory', type: 'int', required: true, min: 0, step: 1, defaultValue: 100 },
       { key: 'safetyStock', label: 'Safety stock (optional)', type: 'int', required: false, min: 0, step: 1, defaultValue: null },
+      { key: 'selectedMaterialIds', label: 'Site materials', type: 'multiselect_materials', required: false, defaultValue: [] },
     ],
   },
   analytics: {
@@ -198,10 +206,8 @@ const state = {
 };
 
 const LINK_SCHEMA = [
-  { key: 'materialName', label: 'Material name', type: 'string', required: true, defaultValue: 'Raw material' },
   { key: 'transportDelayDays', label: 'Transport delay (days)', type: 'int', required: true, min: 0, step: 1, defaultValue: 1 },
   { key: 'maxDailyCapacity', label: 'Max daily capacity', type: 'int', required: true, min: 1, step: 1, defaultValue: 120 },
-  { key: 'priority', label: 'Priority', type: 'int', required: true, min: 1, step: 1, defaultValue: 1 },
   { key: 'costPerShipment', label: 'Cost per shipment (optional)', type: 'number', required: false, min: 0, step: 0.01, defaultValue: null },
 ];
 
@@ -414,7 +420,7 @@ function configureNodePorts(node, el) {
   const materialPort = el.querySelector('.out-port-material');
   const informationPort = el.querySelector('.out-port-information');
   const schema = getNodeSchema(node.type);
-  const outputs = schema?.outputs ?? (['supplier', 'warehouse', 'plant'].includes(node.type) ? ['material', 'information'] : ['information']);
+  const outputs = schema?.outputs ?? (['material', 'supplier', 'warehouse', 'plant'].includes(node.type) ? ['material', 'information'] : ['information']);
   if (materialPort) materialPort.classList.toggle('hidden', !outputs.includes('material'));
   if (informationPort) informationPort.classList.toggle('hidden', !outputs.includes('information'));
 }
@@ -434,6 +440,10 @@ function getNodeBody(node) {
         ? `<select data-field="${field.key}">
             ${(field.options ?? []).map((option) => `<option value="${option.value}" ${String(value) === String(option.value) ? 'selected' : ''}>${option.label}</option>`).join('')}
           </select>`
+        : field.type === 'multiselect_materials'
+          ? `<select data-field="${field.key}" multiple>
+              ${getSelectableMaterialsForSite(node.id).map((materialNode) => `<option value="${materialNode.id}" ${Array.isArray(value) && value.includes(materialNode.id) ? 'selected' : ''}>${materialNode.name}</option>`).join('')}
+            </select>`
         : field.type === 'text'
           ? `<textarea data-field="${field.key}" spellcheck="false">${value}</textarea>`
           : `<input type="number" min="${field.min ?? 0}" step="${field.step ?? 1}" data-field="${field.key}" value="${value}" />`;
@@ -495,6 +505,8 @@ function bindFieldEvents(body, node) {
       if (fieldSchema?.type === 'int') {
         const trimmed = raw.trim();
         value = trimmed === '' ? null : Number(trimmed);
+      } else if (fieldSchema?.type === 'multiselect_materials') {
+        value = Array.from(e.target.selectedOptions).map((option) => option.value);
       }
       node[field] = value;
       node.initial[field] = value;
@@ -527,6 +539,16 @@ function validateNode(node) {
       if (value && !(field.options ?? []).some((option) => option.value === value)) {
         errors[field.key] = `${field.label} has an invalid selection.`;
       }
+      return;
+    }
+    if (field.type === 'multiselect_materials') {
+      if (!Array.isArray(value)) {
+        errors[field.key] = `${field.label} must be a list.`;
+        return;
+      }
+      const available = new Set(getSelectableMaterialsForSite(node.id).map((material) => material.id));
+      const invalidSelection = value.find((item) => !available.has(item));
+      if (invalidSelection) errors[field.key] = `${field.label} contains unavailable material(s).`;
       return;
     }
 
@@ -613,7 +635,7 @@ function createLinkData() {
 function getLinkLabel(link) {
   const delay = `${link.transportDelayDays}d`;
   const cap = `cap ${link.maxDailyCapacity}`;
-  return `${(link.linkType ?? 'material') === 'information' ? 'Info' : 'Material'} • ${link.materialName} • ${delay} • ${cap} • p${link.priority}`;
+  return `${(link.linkType ?? 'material') === 'information' ? 'Info' : 'Material'} • ${delay} • ${cap}`;
 }
 
 function formatLinkCost(value) {
@@ -893,13 +915,14 @@ function tryCreateLink(fromId, toId, linkType = 'material') {
 function isValidLink(from, to, linkType = 'material') {
   const normalizedLinkType = linkType === 'information' ? 'information' : 'material';
   const fromOutputs = getNodeSchema(from.type)?.outputs
-    ?? (['supplier', 'warehouse', 'plant'].includes(from.type) ? ['material', 'information'] : ['information']);
+    ?? (['material', 'supplier', 'warehouse', 'plant'].includes(from.type) ? ['material', 'information'] : ['information']);
   if (normalizedLinkType === 'information') {
     if (!fromOutputs.includes('information')) return false;
     return to.type === 'analytics' || to.type.startsWith('scfl_custom_');
   }
   if (!fromOutputs.includes('material')) return false;
   if (from.type === 'plant' && !state.ui.allowPlantOutbound) return false;
+  if (from.type === 'material' && to.type === 'supplier') return true;
   if (from.type === 'supplier' && (to.type === 'warehouse' || to.type === 'plant')) return true;
   if (from.type === 'warehouse' && to.type === 'plant') return true;
   if (from.type === 'warehouse' && to.type === 'warehouse' && state.ui.allowWarehouseToWarehouse) return true;
@@ -1016,6 +1039,7 @@ function renderSelection() {
       ${node.type === 'warehouse' ? `<div class="selection-row"><span>Prep queue</span><strong>${node.preparationQueue?.length ?? 0} request(s)</strong></div>` : ''}
       ${node.type === 'warehouse' ? `<div class="selection-row"><span>Prep capacity/day</span><strong>${node.preparationCapacityPerDay ?? 'unlimited'}</strong></div>` : ''}
       ${node.type === 'plant' ? `<div class="selection-row"><span>Consumption</span><strong>${node.consumptionRatePerDay}/day</strong></div>` : ''}
+      ${node.type === 'plant' ? `<div class="selection-row"><span>Selected materials</span><strong>${(node.selectedMaterialIds ?? []).map((id) => getNode(id)?.name).filter(Boolean).join(', ') || 'None'}</strong></div>` : ''}
       ${node.type === 'analytics' ? `<div class="selection-row"><span>Metric</span><strong>${node.metric}</strong></div>` : ''}
     </div>
     ${nodeErrors.length ? `<div class="validation-block"><strong>Validation errors</strong><ul>${nodeErrors.map((e) => `<li>${e}</li>`).join('')}</ul></div>` : '<div class="validation-ok">No validation errors.</div>'}
@@ -1144,7 +1168,6 @@ function buildBackendSimulationPayload() {
       materialName: link.materialName,
       transportDelayDays: link.transportDelayDays,
       maxDailyCapacity: link.maxDailyCapacity,
-      priority: link.priority,
       costPerShipment: link.costPerShipment,
       linkType: link.linkType ?? 'material',
     })),
@@ -1259,7 +1282,7 @@ function suppliersShip() {
       .filter((l) => l.from === supplier.id)
       .filter((l) => (l.linkType ?? 'material') === 'material')
       .slice()
-      .sort((a, b) => a.priority - b.priority);
+      .sort((a, b) => a.id.localeCompare(b.id));
     outgoingLinks.forEach((link) => {
       const target = getNode(link.to);
       if (!target) return;
@@ -1290,7 +1313,7 @@ function createWarehouseOutboundRequests(warehouse) {
     .filter((l) => l.from === warehouse.id)
     .filter((l) => (l.linkType ?? 'material') === 'material')
     .slice()
-    .sort((a, b) => a.priority - b.priority);
+    .sort((a, b) => a.id.localeCompare(b.id));
   outboundLinks.forEach((link) => {
     const plant = getNode(link.to);
     if (plant?.type !== 'plant') return;
@@ -1304,13 +1327,13 @@ function createWarehouseOutboundRequests(warehouse) {
       linkId: link.id,
       plantId: plant.id,
       plantName: plant.name,
-      materialName: link.materialName,
+      materialName: resolveLinkMaterialName(link),
       qty: need,
       queuedDay: state.day,
     };
     warehouse.preparationQueue.push(request);
     state.deliveryStats.queueEntries += 1;
-    log(`${warehouse.name} queued outbound request ${request.id}: ${need} ${link.materialName} for ${plant.name}.`);
+    log(`${warehouse.name} queued outbound request ${request.id}: ${need} ${resolveLinkMaterialName(link)} for ${plant.name}.`);
   });
 }
 
@@ -1567,15 +1590,49 @@ function queueShipment(from, to, link, qty, leadTime) {
     from: from.id,
     to: to.id,
     linkId: link.id,
-    materialName: link.materialName,
-    priority: link.priority,
+    materialName: resolveLinkMaterialName(link),
+    priority: 1,
     shipmentCost: link.costPerShipment == null ? null : Number(link.costPerShipment),
     qty,
     departureDay: state.day,
     arrivalDay: state.day + leadTime,
     fromName: from.name,
   });
-  log(`${from.name} shipped ${qty} ${link.materialName} to ${to.name} via ${link.id} (ETA day ${state.day + leadTime})`);
+  log(`${from.name} shipped ${qty} ${resolveLinkMaterialName(link)} to ${to.name} via ${link.id} (ETA day ${state.day + leadTime})`);
+}
+
+function resolveLinkMaterialName(link) {
+  if (link.materialName && String(link.materialName).trim()) return String(link.materialName).trim();
+  const from = getNode(link.from);
+  if (!from) return 'Material';
+  if (from.type === 'material') return from.name;
+  const upstream = getReachableMaterialNodes(link.from);
+  return upstream[0]?.name ?? 'Material';
+}
+
+function getReachableMaterialNodes(nodeId) {
+  const materialById = new Map(state.nodes.filter((node) => node.type === 'material').map((node) => [node.id, node]));
+  const visited = new Set();
+  const queue = [nodeId];
+  const found = new Map();
+  while (queue.length) {
+    const current = queue.shift();
+    if (visited.has(current)) continue;
+    visited.add(current);
+    state.links
+      .filter((link) => link.to === current && (link.linkType ?? 'material') === 'material')
+      .forEach((link) => {
+        if (materialById.has(link.from)) found.set(link.from, materialById.get(link.from));
+        else queue.push(link.from);
+      });
+  }
+  return Array.from(found.values()).sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function getSelectableMaterialsForSite(siteId) {
+  const site = getNode(siteId);
+  if (!site || site.type !== 'plant') return [];
+  return getReachableMaterialNodes(siteId);
 }
 
 function initializeSimulationTracking() {
@@ -1662,6 +1719,10 @@ function normalizeNodeConfig(type, config = {}, sequence = 1) {
       normalized[field.key] = raw == null ? defaults[field.key] : String(raw);
       return;
     }
+    if (field.type === 'multiselect_materials') {
+      normalized[field.key] = Array.isArray(raw) ? raw.map(String) : (Array.isArray(defaults[field.key]) ? defaults[field.key] : []);
+      return;
+    }
     if (raw == null || raw === '') {
       normalized[field.key] = field.required ? defaults[field.key] : null;
       return;
@@ -1723,6 +1784,19 @@ function migrateScenario(rawScenario) {
       ...link,
       linkType: link.linkType ?? (nodeTypeById.get(link.to) === 'analytics' ? 'information' : 'material'),
     }));
+  }
+
+  if (version < 7) {
+    migrated.nodes = (migrated.nodes ?? []).map((node) => {
+      if (node?.type !== 'plant') return node;
+      return {
+        ...node,
+        config: {
+          ...(node.config ?? {}),
+          selectedMaterialIds: Array.isArray(node.config?.selectedMaterialIds) ? node.config.selectedMaterialIds : [],
+        },
+      };
+    });
   }
 
   migrated.ui = {
@@ -1878,17 +1952,15 @@ function importScenarioObject(rawScenario, options = {}) {
     const defaults = createLinkData();
     const transportDelayDays = Number(rawLink.transportDelayDays ?? defaults.transportDelayDays);
     const maxDailyCapacity = Number(rawLink.maxDailyCapacity ?? defaults.maxDailyCapacity);
-    const priority = Number(rawLink.priority ?? defaults.priority);
     const costPerShipment = rawLink.costPerShipment == null ? null : Number(rawLink.costPerShipment);
     state.links.push({
       id: typeof rawLink.id === 'string' && rawLink.id ? rawLink.id : `link-${idx + 1}`,
       from: rawLink.from,
       to: rawLink.to,
       linkType: rawLink.linkType === 'information' ? 'information' : 'material',
-      materialName: String(rawLink.materialName ?? defaults.materialName),
+      materialName: rawLink.materialName == null ? null : String(rawLink.materialName),
       transportDelayDays: Number.isFinite(transportDelayDays) ? transportDelayDays : defaults.transportDelayDays,
       maxDailyCapacity: Number.isFinite(maxDailyCapacity) ? maxDailyCapacity : defaults.maxDailyCapacity,
-      priority: Number.isFinite(priority) ? priority : defaults.priority,
       costPerShipment: costPerShipment == null || Number.isFinite(costPerShipment) ? costPerShipment : null,
       validationErrors: {},
     });
@@ -1944,10 +2016,8 @@ function serializeGraph() {
       from: l.from,
       to: l.to,
       linkType: l.linkType ?? 'material',
-      materialName: l.materialName,
       transportDelayDays: l.transportDelayDays,
       maxDailyCapacity: l.maxDailyCapacity,
-      priority: l.priority,
       costPerShipment: l.costPerShipment,
     })),
   };
@@ -2698,6 +2768,7 @@ window.addEventListener('keyup', (e) => {
   }
 });
 
+document.getElementById('addMaterial').addEventListener('click', () => addNode('material'));
 document.getElementById('addSupplier').addEventListener('click', () => addNode('supplier'));
 document.getElementById('addWarehouse').addEventListener('click', () => addNode('warehouse'));
 document.getElementById('addPlant').addEventListener('click', () => addNode('plant'));
