@@ -156,6 +156,7 @@ const state = {
     fulfillmentDelayTotal: 0,
   },
   shipmentsByDay: [],
+  shipmentsByDayBySourceNode: {},
   stockoutEvents: [],
   analyticsNodeId: null,
   kpis: {
@@ -1174,6 +1175,7 @@ function buildBackendSimulationPayload() {
     shipments: state.shipments,
     deliveryStats: state.deliveryStats,
     shipmentsByDay: state.shipmentsByDay,
+    shipmentsByDayBySourceNode: state.shipmentsByDayBySourceNode,
     stockoutEvents: state.stockoutEvents,
     inventoryHistoryByNode: state.inventoryHistoryByNode,
     transitHistory: state.transitHistory,
@@ -1185,6 +1187,7 @@ function applyBackendSimulationResult(result) {
   state.shipments = result.shipments;
   state.deliveryStats = result.deliveryStats;
   state.shipmentsByDay = result.shipmentsByDay;
+  state.shipmentsByDayBySourceNode = result.shipmentsByDayBySourceNode ?? {};
   state.stockoutEvents = result.stockoutEvents;
   state.inventoryHistoryByNode = result.inventoryHistoryByNode;
   state.transitHistory = result.transitHistory;
@@ -1586,6 +1589,15 @@ function queueShipment(from, to, link, qty, leadTime) {
     dayBucket.count += 1;
     dayBucket.volume += qty;
   }
+  if (!state.shipmentsByDayBySourceNode[from.id]) state.shipmentsByDayBySourceNode[from.id] = [];
+  const sourceBuckets = state.shipmentsByDayBySourceNode[from.id];
+  let sourceDayBucket = sourceBuckets[sourceBuckets.length - 1];
+  if (!sourceDayBucket || sourceDayBucket.day !== state.day) {
+    sourceDayBucket = { day: state.day, count: 0, volume: 0 };
+    sourceBuckets.push(sourceDayBucket);
+  }
+  sourceDayBucket.count += 1;
+  sourceDayBucket.volume += qty;
   state.shipments.push({
     from: from.id,
     to: to.id,
@@ -1658,6 +1670,7 @@ function initializeSimulationTracking() {
     fulfillmentDelayTotal: 0,
   };
   state.shipmentsByDay = [];
+  state.shipmentsByDayBySourceNode = {};
   state.stockoutEvents = [];
   state.nodes.forEach((node) => {
     initializeNodeRuntime(node);
@@ -2086,7 +2099,8 @@ function renderAnalytics() {
 }
 
 function getPrimaryAnalyticsSource(analyticsNode) {
-  const inputLink = state.links.find((link) => link.to === analyticsNode.id && (link.linkType ?? 'material') === 'information');
+  const inputLinks = state.links.filter((link) => link.to === analyticsNode.id && (link.linkType ?? 'material') === 'information');
+  const inputLink = inputLinks.at(-1);
   return inputLink ? getNode(inputLink.from) : null;
 }
 
@@ -2108,7 +2122,11 @@ function readMetricValue(analyticsNode) {
     case 'total_shipped':
       return state.kpis.totalShippedVolume;
     case 'shipments_today':
-      return state.shipmentsByDay.at(-1)?.count ?? 0;
+      return source
+        ? (state.shipmentsByDayBySourceNode[source.id]?.at(-1)?.day === state.day
+          ? state.shipmentsByDayBySourceNode[source.id].at(-1).count
+          : 0)
+        : (state.shipmentsByDay.at(-1)?.count ?? 0);
     case 'node_inventory':
       return source ? (Number.isFinite(source.inventory) ? source.inventory : '∞') : '—';
     case 'node_shipped':
@@ -2138,7 +2156,11 @@ function readMetricNumericValue(analyticsNode) {
     case 'total_shipped':
       return state.kpis.totalShippedVolume;
     case 'shipments_today':
-      return state.shipmentsByDay.at(-1)?.count ?? 0;
+      return source
+        ? (state.shipmentsByDayBySourceNode[source.id]?.at(-1)?.day === state.day
+          ? state.shipmentsByDayBySourceNode[source.id].at(-1).count
+          : 0)
+        : (state.shipmentsByDay.at(-1)?.count ?? 0);
     case 'node_inventory':
       return source && Number.isFinite(source.inventory) ? source.inventory : null;
     case 'node_shipped':

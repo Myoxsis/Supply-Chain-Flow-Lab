@@ -35,6 +35,7 @@ def _queue_shipment(
     shipments: list[dict[str, Any]],
     delivery_stats: dict[str, Any],
     shipments_by_day: list[dict[str, Any]],
+    shipments_by_day_by_source_node: dict[str, list[dict[str, Any]]],
     from_node: dict[str, Any],
     to_node: dict[str, Any],
     link: dict[str, Any],
@@ -44,11 +45,19 @@ def _queue_shipment(
     delivery_stats["dispatched"] += 1
     shipment_cost = link.get("costPerShipment")
     if shipment_cost is not None:
-      delivery_stats["shipmentCost"] += float(shipment_cost)
+        delivery_stats["shipmentCost"] += float(shipment_cost)
 
     day_bucket = shipments_by_day[-1]
     day_bucket["count"] += 1
     day_bucket["volume"] += qty
+    source_day_buckets = shipments_by_day_by_source_node.setdefault(from_node["id"], [])
+    if source_day_buckets and source_day_buckets[-1].get("day") == day:
+        source_day_bucket = source_day_buckets[-1]
+    else:
+        source_day_bucket = {"day": day, "count": 0, "volume": 0}
+        source_day_buckets.append(source_day_bucket)
+    source_day_bucket["count"] += 1
+    source_day_bucket["volume"] += qty
 
     shipments.append(
         {
@@ -132,6 +141,7 @@ def simulate_day(payload: dict[str, Any]) -> StepResult:
         "shipments": payload.get("shipments", []),
         "deliveryStats": payload.get("deliveryStats", {}),
         "shipmentsByDay": payload.get("shipmentsByDay", []),
+        "shipmentsByDayBySourceNode": payload.get("shipmentsByDayBySourceNode", {}),
         "stockoutEvents": payload.get("stockoutEvents", []),
         "inventoryHistoryByNode": payload.get("inventoryHistoryByNode", {}),
         "transitHistory": payload.get("transitHistory", []),
@@ -213,6 +223,7 @@ def simulate_day(payload: dict[str, Any]) -> StepResult:
                     state["shipments"],
                     state["deliveryStats"],
                     state["shipmentsByDay"],
+                    state["shipmentsByDayBySourceNode"],
                     supplier,
                     target,
                     link,
@@ -341,6 +352,7 @@ def simulate_day(payload: dict[str, Any]) -> StepResult:
                             state["shipments"],
                             state["deliveryStats"],
                             state["shipmentsByDay"],
+                            state["shipmentsByDayBySourceNode"],
                             warehouse,
                             plant,
                             link,
@@ -415,6 +427,7 @@ def simulate_day(payload: dict[str, Any]) -> StepResult:
         "shipments": state["shipments"],
         "deliveryStats": state["deliveryStats"],
         "shipmentsByDay": state["shipmentsByDay"],
+        "shipmentsByDayBySourceNode": state["shipmentsByDayBySourceNode"],
         "stockoutEvents": state["stockoutEvents"],
         "inventoryHistoryByNode": state["inventoryHistoryByNode"],
         "transitHistory": state["transitHistory"],
