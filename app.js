@@ -1912,7 +1912,9 @@ function importScenarioObject(rawScenario, options = {}) {
   clearGraph();
   state.day = Number.isInteger(scenario.day) && scenario.day >= 0 ? scenario.day : 0;
   state.globalPythonCode = typeof scenario.globalPythonCode === 'string' ? scenario.globalPythonCode : '';
-  globalPythonCodeEl.value = state.globalPythonCode;
+  if (globalPythonCodeEl) {
+    globalPythonCodeEl.value = state.globalPythonCode;
+  }
   state.ui.showLinkLabels = Boolean(scenario.ui?.showLinkLabels);
   state.ui.allowWarehouseToWarehouse = Boolean(scenario.ui?.allowWarehouseToWarehouse);
   state.ui.allowPlantOutbound = Boolean(scenario.ui?.allowPlantOutbound);
@@ -2972,11 +2974,13 @@ if (exportNodePackageBtn) {
     log('SCFL-node package exported');
   });
 }
-globalPythonCodeEl.addEventListener('input', (e) => {
-  state.globalPythonCode = e.target.value;
-  persistScenarioToLocalStorage();
-});
-state.globalPythonCode = globalPythonCodeEl.value;
+if (globalPythonCodeEl) {
+  globalPythonCodeEl.addEventListener('input', (e) => {
+    state.globalPythonCode = e.target.value;
+    persistScenarioToLocalStorage();
+  });
+  state.globalPythonCode = globalPythonCodeEl.value;
+}
 setSnapToGrid(state.ui.snapToGrid);
 renderNodePackageList();
 if (showLinkLabelsInput) {
