@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
 from flask import Flask, jsonify, request, send_from_directory
 
-from .simulation_engine import simulate_day
+if __package__ in {None, ""}:
+    sys.path.append(str(Path(__file__).resolve().parent))
+    from simulation_engine import simulate_day
+else:
+    from .simulation_engine import simulate_day
 
 ROOT_DIR = Path(__file__).resolve().parent.parent
 
