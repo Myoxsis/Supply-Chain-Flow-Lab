@@ -20,15 +20,6 @@ def _is_material_link(link: dict[str, Any]) -> bool:
     return (link.get("linkType") or "material") == "material"
 
 
-def _remaining_link_capacity(link: dict[str, Any], day: int, shipments: list[dict[str, Any]]) -> float:
-    shipped_today = sum(
-        s.get("qty", 0)
-        for s in shipments
-        if s.get("linkId") == link["id"] and s.get("departureDay") == day
-    )
-    return max(0, (link.get("maxDailyCapacity") or 0) - shipped_today)
-
-
 def _queue_shipment(
     events: list[str],
     day: int,
@@ -171,9 +162,68 @@ def simulate_day(payload: dict[str, Any]) -> StepResult:
         day = state["day"]
         state["shipmentsByDay"].append({"day": day, "count": 0, "volume": 0})
 
-        arriving = [s for s in state["shipments"] if s.get("arrivalDay", 0) <= day]
-        state["shipments"] = [s for s in state["shipments"] if s.get("arrivalDay", 0) > day]
-        for shipment in arriving:
+        links_by_source: dict[str, list[dict[str, Any]]] = defaultdict(list)
+        link_by_id: dict[str, dict[str, Any]] = {}
+        for link in state["links"]:
+            link_id = link.get("id")
+            if link_id is not None:
+                link_by_id[link_id] = link
+            if _is_material_link(link):
+                links_by_source[link.get("from")].append(link)
+        for source_links in links_by_source.values():
+            source_links.sort(key=lambda link: link.get("priority", 1))
+
+        arrivals_today: list[dict[str, Any]] = []
+        remaining_shipments: list[dict[str, Any]] = []
+        shipments_departing_today_by_link: dict[str, float] = defaultdict(float)
+        in_transit_by_route_link: dict[tuple[str, str, str], float] = defaultdict(float)
+        for shipment in state["shipments"]:
+            if shipment.get("arrivalDay", 0) <= day:
+                arrivals_today.append(shipment)
+                continue
+            remaining_shipments.append(shipment)
+            link_id = shipment.get("linkId")
+            if shipment.get("departureDay") == day and link_id is not None:
+                shipments_departing_today_by_link[link_id] += float(shipment.get("qty", 0) or 0)
+            route_key = (shipment.get("from"), shipment.get("to"), link_id)
+            in_transit_by_route_link[route_key] += float(shipment.get("qty", 0) or 0)
+
+        state["shipments"] = remaining_shipments
+
+        def remaining_link_capacity(link: dict[str, Any]) -> float:
+            link_id = link.get("id")
+            if link_id is None:
+                return 0
+            used_today = shipments_departing_today_by_link.get(link_id, 0)
+            return max(0, (link.get("maxDailyCapacity") or 0) - used_today)
+
+        def queue_and_index_shipment(
+            from_node: dict[str, Any],
+            to_node: dict[str, Any],
+            link: dict[str, Any],
+            qty: float,
+            lead_time: int,
+        ) -> None:
+            _queue_shipment(
+                events,
+                day,
+                state["shipments"],
+                state["deliveryStats"],
+                state["shipmentsByDay"],
+                state["shipmentsByDayBySourceNode"],
+                from_node,
+                to_node,
+                link,
+                qty,
+                lead_time,
+            )
+            link_id = link.get("id")
+            if link_id is not None:
+                shipments_departing_today_by_link[link_id] += qty
+                route_key = (from_node.get("id"), to_node.get("id"), link_id)
+                in_transit_by_route_link[route_key] += qty
+
+        for shipment in arrivals_today:
             to_node = node_by_id.get(shipment.get("to"))
             if not to_node:
                 continue
@@ -199,15 +249,11 @@ def simulate_day(payload: dict[str, Any]) -> StepResult:
             freq = int(supplier.get("deliveryFrequencyDays") or 1)
             if day % freq != 0:
                 continue
-            links = sorted(
-                [l for l in state["links"] if l.get("from") == supplier["id"] and _is_material_link(l)],
-                key=lambda l: l.get("priority", 1),
-            )
-            for link in links:
+            for link in links_by_source.get(supplier["id"], []):
                 target = node_by_id.get(link.get("to"))
                 if not target:
                     continue
-                link_cap = _remaining_link_capacity(link, day, state["shipments"])
+                link_cap = remaining_link_capacity(link)
                 if link_cap <= 0:
                     continue
                 qty_cap = min(float(supplier.get("deliveryQuantity") or 0), link_cap)
@@ -217,13 +263,7 @@ def simulate_day(payload: dict[str, Any]) -> StepResult:
                     qty = min(qty_cap, float(supplier.get("inventory", 0) or 0))
                 if qty <= 0:
                     continue
-                _queue_shipment(
-                    events,
-                    day,
-                    state["shipments"],
-                    state["deliveryStats"],
-                    state["shipmentsByDay"],
-                    state["shipmentsByDayBySourceNode"],
+                queue_and_index_shipment(
                     supplier,
                     target,
                     link,
@@ -240,32 +280,26 @@ def simulate_day(payload: dict[str, Any]) -> StepResult:
             warehouse.setdefault("preparingShipments", [])
             warehouse.setdefault("nextQueueRequestId", 1)
 
-            out_links = sorted(
-                [l for l in state["links"] if l.get("from") == warehouse["id"] and _is_material_link(l)],
-                key=lambda l: l.get("priority", 1),
-            )
-            for link in out_links:
+            queue_totals_by_link_plant: dict[tuple[str, str], float] = defaultdict(float)
+            for request in warehouse["preparationQueue"]:
+                key = (request.get("linkId"), request.get("plantId"))
+                queue_totals_by_link_plant[key] += float(request.get("qty", 0) or 0)
+            preparing_totals_by_link_plant: dict[tuple[str, str], float] = defaultdict(float)
+            for request in warehouse["preparingShipments"]:
+                key = (request.get("linkId"), request.get("plantId"))
+                preparing_totals_by_link_plant[key] += float(request.get("qty", 0) or 0)
+
+            for link in links_by_source.get(warehouse["id"], []):
                 plant = node_by_id.get(link.get("to"))
                 if not plant or plant.get("type") != "plant":
                     continue
                 safety = float(plant.get("safetyStock") or 0)
                 desired = safety + float(plant.get("consumptionRatePerDay") or 0)
 
-                queued = sum(
-                    float(req.get("qty", 0))
-                    for req in warehouse["preparationQueue"]
-                    if req.get("linkId") == link["id"] and req.get("plantId") == plant["id"]
-                )
-                preparing = sum(
-                    float(req.get("qty", 0))
-                    for req in warehouse["preparingShipments"]
-                    if req.get("linkId") == link["id"] and req.get("plantId") == plant["id"]
-                )
-                in_transit = sum(
-                    float(s.get("qty", 0))
-                    for s in state["shipments"]
-                    if s.get("from") == warehouse["id"] and s.get("to") == plant["id"] and s.get("linkId") == link["id"]
-                )
+                link_plant_key = (link.get("id"), plant["id"])
+                queued = queue_totals_by_link_plant.get(link_plant_key, 0)
+                preparing = preparing_totals_by_link_plant.get(link_plant_key, 0)
+                in_transit = in_transit_by_route_link.get((warehouse["id"], plant["id"], link.get("id")), 0)
                 committed = queued + preparing + in_transit
                 need = max(0, desired - (float(plant.get("inventory", 0) or 0) + committed))
                 if need <= 0:
@@ -322,22 +356,25 @@ def simulate_day(payload: dict[str, Any]) -> StepResult:
                             f"{warehouse.get('name')} partially prepared request {request.get('id')}; {remaining} units remain in queue."
                         )
 
-            ready = sorted(
-                [p for p in warehouse["preparingShipments"] if int(p.get("readyDay", day + 1)) <= day],
-                key=lambda p: p.get("queuedDay", day),
-            )
-            not_ready = [p for p in warehouse["preparingShipments"] if int(p.get("readyDay", day + 1)) > day]
+            ready: list[dict[str, Any]] = []
+            not_ready: list[dict[str, Any]] = []
+            for prep_order in warehouse["preparingShipments"]:
+                if int(prep_order.get("readyDay", day + 1)) <= day:
+                    ready.append(prep_order)
+                else:
+                    not_ready.append(prep_order)
+            ready.sort(key=lambda p: p.get("queuedDay", day))
             by_link: dict[str, list[dict[str, Any]]] = defaultdict(list)
             for order in ready:
                 by_link[order.get("linkId")].append(order)
 
             remaining = []
             for link_id, orders in by_link.items():
-                link = next((l for l in state["links"] if l.get("id") == link_id), None)
+                link = link_by_id.get(link_id)
                 if not link:
                     remaining.extend(orders)
                     continue
-                cap = _remaining_link_capacity(link, day, state["shipments"])
+                cap = remaining_link_capacity(link)
                 for order in orders:
                     plant = node_by_id.get(order.get("plantId"))
                     if not plant or plant.get("type") != "plant":
@@ -346,13 +383,7 @@ def simulate_day(payload: dict[str, Any]) -> StepResult:
                     dispatch = min(float(order.get("qty", 0)), cap)
                     if dispatch > 0:
                         warehouse["shipped"] = float(warehouse.get("shipped", 0) or 0) + dispatch
-                        _queue_shipment(
-                            events,
-                            day,
-                            state["shipments"],
-                            state["deliveryStats"],
-                            state["shipmentsByDay"],
-                            state["shipmentsByDayBySourceNode"],
+                        queue_and_index_shipment(
                             warehouse,
                             plant,
                             link,
