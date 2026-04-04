@@ -55,7 +55,18 @@ const MAX_ZOOM = 2.5;
 const GRID_SIZE = 24;
 const SCENARIO_STORAGE_KEY = 'supply-chain-flow-lab:scenario';
 const SCENARIO_VERSION = 6;
-const SIM_API_BASE = '/api/simulation';
+const API_BASE_OVERRIDE_KEY = 'supply-chain-flow-lab:api-base-url';
+const FALLBACK_FILE_API_ORIGIN = 'http://localhost:5000';
+
+function resolveSimulationApiBase() {
+  const override = window.localStorage.getItem(API_BASE_OVERRIDE_KEY)?.trim();
+  const normalizedOverride = override?.replace(/\/+$/, '');
+  if (normalizedOverride) return `${normalizedOverride}/api/simulation`;
+  if (window.location.protocol === 'file:') return `${FALLBACK_FILE_API_ORIGIN}/api/simulation`;
+  return '/api/simulation';
+}
+
+const SIM_API_BASE = resolveSimulationApiBase();
 
 const NODE_SCHEMAS = {
   supplier: {
@@ -1197,6 +1208,9 @@ async function stepSimulation() {
     await runOneSimulationDay();
   } catch (error) {
     log(`Simulation error: ${error.message}`);
+    if (window.location.protocol === 'file:') {
+      log('Tip: You are running from a local file URL. Start the backend (`python -m backend.app`) and open http://localhost:5000, or set localStorage key "supply-chain-flow-lab:api-base-url" to your backend origin.');
+    }
     setSimulationStatus('paused');
   }
 }
