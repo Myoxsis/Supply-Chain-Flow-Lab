@@ -112,6 +112,7 @@ const NODE_SCHEMAS = {
     label: 'Analytics',
     fields: [
       { key: 'name', label: 'Name', type: 'string', required: true, defaultValue: (i) => `Analytics ${i}` },
+      { key: 'sourceNodeId', label: 'Source node', type: 'select_analytics_source', required: false, defaultValue: null },
       {
         key: 'metric',
         label: 'Metric',
@@ -430,6 +431,23 @@ function getFieldError(node, fieldKey) {
   return node.validationErrors[fieldKey] || '';
 }
 
+function getConnectedAnalyticsSourceNodes(analyticsNode) {
+  if (!analyticsNode || analyticsNode.type !== 'analytics') return [];
+  const uniqueSourceIds = [...new Set(
+    state.links
+      .filter((link) => link.to === analyticsNode.id && (link.linkType ?? 'material') === 'information')
+      .map((link) => link.from),
+  )].sort((a, b) => String(a).localeCompare(String(b)));
+  return uniqueSourceIds.map((id) => getNode(id)).filter(Boolean);
+}
+
+function getSelectableFieldOptions(node, field) {
+  if (field.type === 'select_analytics_source') {
+    return getConnectedAnalyticsSourceNodes(node).map((sourceNode) => ({ value: sourceNode.id, label: `${sourceNode.name} (${sourceNode.type})` }));
+  }
+  return field.options ?? [];
+}
+
 function getNodeBody(node) {
   const schema = getNodeSchema(node.type);
   const fieldsHtml = schema.fields
@@ -437,9 +455,10 @@ function getNodeBody(node) {
     .map((field) => {
       const value = node[field.key] == null ? '' : node[field.key];
       const error = getFieldError(node, field.key);
-      const inputHtml = field.type === 'select'
+      const inputHtml = field.type === 'select' || field.type === 'select_analytics_source'
         ? `<select data-field="${field.key}">
-            ${(field.options ?? []).map((option) => `<option value="${option.value}" ${String(value) === String(option.value) ? 'selected' : ''}>${option.label}</option>`).join('')}
+            ${field.type === 'select_analytics_source' ? '<option value="">Auto-select (first connected source)</option>' : ''}
+            ${getSelectableFieldOptions(node, field).map((option) => `<option value="${option.value}" ${String(value) === String(option.value) ? 'selected' : ''}>${option.label}</option>`).join('')}
           </select>`
         : field.type === 'multiselect_materials'
           ? `<select data-field="${field.key}" multiple>
@@ -506,6 +525,8 @@ function bindFieldEvents(body, node) {
       if (fieldSchema?.type === 'int') {
         const trimmed = raw.trim();
         value = trimmed === '' ? null : Number(trimmed);
+      } else if (fieldSchema?.type === 'select_analytics_source') {
+        value = raw.trim() === '' ? null : raw;
       } else if (fieldSchema?.type === 'multiselect_materials') {
         value = Array.from(e.target.selectedOptions).map((option) => option.value);
       }
@@ -532,12 +553,12 @@ function validateNode(node) {
       }
       return;
     }
-    if (field.type === 'select') {
+    if (field.type === 'select' || field.type === 'select_analytics_source') {
       if (field.required && !value) {
         errors[field.key] = `${field.label} is required.`;
         return;
       }
-      if (value && !(field.options ?? []).some((option) => option.value === value)) {
+      if (value && !getSelectableFieldOptions(node, field).some((option) => option.value === value)) {
         errors[field.key] = `${field.label} has an invalid selection.`;
       }
       return;
@@ -705,6 +726,7 @@ function deleteNodes(nodeIds) {
   const idSet = new Set(nodeIds);
   state.nodes = state.nodes.filter((n) => !idSet.has(n.id));
   state.links = state.links.filter((l) => !idSet.has(l.from) && !idSet.has(l.to));
+  ensureAnalyticsSourceNodeIds();
   state.shipments = state.shipments.filter((s) => !idSet.has(s.from) && !idSet.has(s.to));
   nodeIds.forEach((nodeId) => {
     delete state.inventoryHistoryByNode[nodeId];
@@ -719,6 +741,7 @@ function deleteNodes(nodeIds) {
   }
   validateAll();
   drawLinks();
+  refreshAnalyticsNodeCards();
   renderSelection();
   renderAnalyticsNodeOptions();
   updateStats();
@@ -905,11 +928,13 @@ function tryCreateLink(fromId, toId, linkType = 'material') {
     validationErrors: {},
   };
   state.links.push(link);
+  ensureAnalyticsSourceNodeIds();
   state.selectedLinkIds = [link.id];
   state.selectedNodeIds = [];
   validateAll();
   log(`Linked ${from.name} → ${to.name} (${normalizedLinkType})`);
   drawLinks();
+  refreshAnalyticsNodeCards();
   renderSelection();
 }
 
@@ -1732,6 +1757,10 @@ function normalizeNodeConfig(type, config = {}, sequence = 1) {
       normalized[field.key] = raw == null ? defaults[field.key] : String(raw);
       return;
     }
+    if (field.type === 'select_analytics_source') {
+      normalized[field.key] = raw == null || raw === '' ? null : String(raw);
+      return;
+    }
     if (field.type === 'multiselect_materials') {
       normalized[field.key] = Array.isArray(raw) ? raw.map(String) : (Array.isArray(defaults[field.key]) ? defaults[field.key] : []);
       return;
@@ -1991,6 +2020,7 @@ function importScenarioObject(rawScenario, options = {}) {
   }, 0);
   state.nodeCounter = Math.max(1, maxNodeCounter + 1);
   state.linkCounter = Math.max(1, maxLinkCounter + 1);
+  ensureAnalyticsSourceNodeIds();
 
   showLinkLabelsInput.checked = state.ui.showLinkLabels;
   allowWarehouseToWarehouseInput.checked = state.ui.allowWarehouseToWarehouse;
@@ -2093,6 +2123,18 @@ function renderAnalyticsNodeOptions() {
   analyticsNodeSelect.value = state.analyticsNodeId;
 }
 
+function refreshAnalyticsNodeCards() {
+  state.nodes
+    .filter((node) => node.type === 'analytics')
+    .forEach((node) => {
+      const el = getNodeElement(node.id);
+      if (!el) return;
+      const body = el.querySelector('.node-body');
+      body.innerHTML = getNodeBody(node);
+      bindFieldEvents(body, node);
+    });
+}
+
 function renderAnalytics() {
   renderKpiBar();
   renderInventoryChart();
@@ -2100,10 +2142,33 @@ function renderAnalytics() {
   renderAnalyticsNodeCharts();
 }
 
+function ensureAnalyticsSourceNodeIds() {
+  state.nodes
+    .filter((node) => node.type === 'analytics')
+    .forEach((analyticsNode) => {
+      const connectedSources = getConnectedAnalyticsSourceNodes(analyticsNode);
+      if (!connectedSources.length) {
+        analyticsNode.sourceNodeId = null;
+        analyticsNode.initial.sourceNodeId = null;
+        return;
+      }
+      const configured = analyticsNode.sourceNodeId;
+      const hasValidConfigured = configured && connectedSources.some((sourceNode) => sourceNode.id === configured);
+      if (!hasValidConfigured) {
+        analyticsNode.sourceNodeId = connectedSources[0].id;
+        analyticsNode.initial.sourceNodeId = connectedSources[0].id;
+      }
+    });
+}
+
 function getPrimaryAnalyticsSource(analyticsNode) {
-  const inputLinks = state.links.filter((link) => link.to === analyticsNode.id && (link.linkType ?? 'material') === 'information');
-  const inputLink = inputLinks.at(-1);
-  return inputLink ? getNode(inputLink.from) : null;
+  const connectedSources = getConnectedAnalyticsSourceNodes(analyticsNode);
+  if (!connectedSources.length) return null;
+  if (analyticsNode.sourceNodeId) {
+    const configuredSource = connectedSources.find((node) => node.id === analyticsNode.sourceNodeId);
+    if (configuredSource) return configuredSource;
+  }
+  return connectedSources[0] ?? null;
 }
 
 function getShipmentsTodayForNode(sourceNode) {
@@ -2230,13 +2295,20 @@ function renderKpiBar() {
   }
 
   kpiBar.innerHTML = analyticsNodes.map((node) => {
+    const connectedSources = getConnectedAnalyticsSourceNodes(node);
     const source = getPrimaryAnalyticsSource(node);
     const value = readMetricValue(node);
+    const hasConfiguredSource = Boolean(node.sourceNodeId);
+    const invalidConfiguredSource = hasConfiguredSource && !connectedSources.some((item) => item.id === node.sourceNodeId);
+    const warning = invalidConfiguredSource
+      ? 'Selected source is no longer connected.'
+      : (!source ? 'No valid source selected.' : '');
     return `
       <div class="kpi-pill">
         <span>${node.name}</span>
         <strong>${value}</strong>
-        <div class="chart-meta">${node.metric}${source ? ` · source: ${source.name}` : ''}</div>
+        <div class="chart-meta">${node.metric} · source: ${source ? `${source.name} (${source.id})` : 'none'}</div>
+        ${warning ? `<div class="chart-meta" style="color: #fbbf24;">⚠ ${warning}</div>` : ''}
       </div>
     `;
   }).join('');
@@ -2381,9 +2453,11 @@ function deleteSelected() {
   if (state.selectedLinkIds.length) {
     const deleteSet = new Set(state.selectedLinkIds);
     state.links = state.links.filter((link) => !deleteSet.has(link.id));
+    ensureAnalyticsSourceNodeIds();
     state.selectedLinkIds = [];
     validateAll();
     drawLinks();
+    refreshAnalyticsNodeCards();
     renderSelection();
     return;
   }
