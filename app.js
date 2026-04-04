@@ -55,6 +55,7 @@ const MAX_ZOOM = 2.5;
 const GRID_SIZE = 24;
 const SCENARIO_STORAGE_KEY = 'supply-chain-flow-lab:scenario';
 const SCENARIO_VERSION = 6;
+const SIM_API_BASE = '/api/simulation';
 
 const NODE_SCHEMAS = {
   supplier: {
@@ -1099,18 +1100,104 @@ function refreshSimulationNodeViews() {
   });
 }
 
-function runOneSimulationDay() {
+function buildBackendSimulationPayload() {
+  return {
+    day: state.day,
+    nodes: state.nodes.map((node) => ({
+      id: node.id,
+      type: node.type,
+      name: node.name,
+      inventory: Number.isFinite(node.inventory) ? node.inventory : null,
+      shipped: node.shipped,
+      received: node.received,
+      stockouts: node.stockouts,
+      deliveryFrequencyDays: node.deliveryFrequencyDays ?? null,
+      deliveryQuantity: node.deliveryQuantity ?? null,
+      leadTimeDays: node.leadTimeDays ?? null,
+      preparationTimeDays: node.preparationTimeDays ?? null,
+      preparationCapacityPerDay: node.preparationCapacityPerDay ?? null,
+      deliveryToPlantDays: node.deliveryToPlantDays ?? null,
+      storageCapacity: node.storageCapacity ?? null,
+      consumptionRatePerDay: node.consumptionRatePerDay ?? null,
+      safetyStock: node.safetyStock ?? null,
+      preparationQueue: node.preparationQueue ?? [],
+      preparingShipments: node.preparingShipments ?? [],
+      nextQueueRequestId: node.nextQueueRequestId ?? 1,
+      isInfiniteInventory: node.type === 'supplier' && !Number.isFinite(node.inventory),
+    })),
+    links: state.links.map((link) => ({
+      id: link.id,
+      from: link.from,
+      to: link.to,
+      materialName: link.materialName,
+      transportDelayDays: link.transportDelayDays,
+      maxDailyCapacity: link.maxDailyCapacity,
+      priority: link.priority,
+      costPerShipment: link.costPerShipment,
+      linkType: link.linkType ?? 'material',
+    })),
+    shipments: state.shipments,
+    deliveryStats: state.deliveryStats,
+    shipmentsByDay: state.shipmentsByDay,
+    stockoutEvents: state.stockoutEvents,
+    inventoryHistoryByNode: state.inventoryHistoryByNode,
+    transitHistory: state.transitHistory,
+  };
+}
+
+function applyBackendSimulationResult(result) {
+  state.day = result.day;
+  state.shipments = result.shipments;
+  state.deliveryStats = result.deliveryStats;
+  state.shipmentsByDay = result.shipmentsByDay;
+  state.stockoutEvents = result.stockoutEvents;
+  state.inventoryHistoryByNode = result.inventoryHistoryByNode;
+  state.transitHistory = result.transitHistory;
+  state.kpis = result.kpis;
+
+  result.nodes.forEach((updatedNode) => {
+    const local = getNode(updatedNode.id);
+    if (!local) return;
+    local.inventory = updatedNode.isInfiniteInventory ? Infinity : updatedNode.inventory;
+    local.shipped = updatedNode.shipped;
+    local.received = updatedNode.received;
+    local.stockouts = updatedNode.stockouts;
+    if (local.type === 'warehouse') {
+      local.preparationQueue = updatedNode.preparationQueue ?? [];
+      local.preparingShipments = updatedNode.preparingShipments ?? [];
+      local.nextQueueRequestId = updatedNode.nextQueueRequestId ?? 1;
+    }
+  });
+  (result.events ?? []).forEach((message) => log(message));
+}
+
+async function runOneSimulationDay() {
   if (!canRunSimulation()) return false;
-  simulateDay();
+  const response = await fetch(`${SIM_API_BASE}/step`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(buildBackendSimulationPayload()),
+  });
+  if (!response.ok) {
+    const errorPayload = await response.json().catch(() => ({}));
+    throw new Error(errorPayload.error ?? `Backend simulation failed (${response.status})`);
+  }
+  const result = await response.json();
+  applyBackendSimulationResult(result);
   updateStats();
   refreshSimulationNodeViews();
   renderSelection();
   return true;
 }
 
-function stepSimulation() {
+async function stepSimulation() {
   if (state.simulation.status === 'running') return;
-  runOneSimulationDay();
+  try {
+    await runOneSimulationDay();
+  } catch (error) {
+    log(`Simulation error: ${error.message}`);
+    setSimulationStatus('paused');
+  }
 }
 
 function simulateDay() {
@@ -1403,14 +1490,14 @@ function computeKpis() {
   };
 }
 
-function simulateDays(days) {
+async function simulateDays(days) {
   if (!canRunSimulation()) return null;
   const totalDays = Number(days);
   if (!Number.isInteger(totalDays) || totalDays < 0) throw new Error('days must be a non-negative integer');
-  for (let i = 0; i < totalDays; i += 1) simulateDay();
-  updateStats();
-  refreshSimulationNodeViews();
-  renderSelection();
+  for (let i = 0; i < totalDays; i += 1) {
+    const ok = await runOneSimulationDay();
+    if (!ok) break;
+  }
   return buildSimulationOutput();
 }
 
@@ -2461,14 +2548,20 @@ function runSimulationTick() {
   }
 
   state.simulation.tickInProgress = true;
-  window.requestAnimationFrame(() => {
-    const ok = runOneSimulationDay();
-    state.simulation.tickInProgress = false;
-    if (!ok) {
+  window.requestAnimationFrame(async () => {
+    try {
+      const ok = await runOneSimulationDay();
+      state.simulation.tickInProgress = false;
+      if (!ok) {
+        setSimulationStatus('paused');
+        return;
+      }
+      scheduleNextSimulationTick();
+    } catch (error) {
+      state.simulation.tickInProgress = false;
+      log(`Simulation error: ${error.message}`);
       setSimulationStatus('paused');
-      return;
     }
-    scheduleNextSimulationTick();
   });
 }
 

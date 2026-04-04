@@ -5,10 +5,15 @@ What is included
 - index.html
 - styles.css
 - app.js
+- backend/app.py
+- backend/simulation_engine.py
+- requirements.txt
 
 How to run
-1. Unzip the folder.
-2. Open index.html in a browser.
+1. Install Python 3.10+.
+2. Install dependencies: `pip install -r requirements.txt`
+3. Start the server: `python -m backend.app`
+4. Open `http://localhost:5000` in your browser.
 
 What this draft does
 - ComfyUI-inspired dark node canvas.
@@ -28,6 +33,8 @@ What this draft does
   - Warehouse stages outbound demand in a preparation queue.
   - Warehouse dispatches only after preparation time and optional per-day preparation capacity.
   - Plant consumes at its consumption rate.
+- Runs simulation ticks on a Python backend (Flask API) so the UI remains unchanged while execution is server-managed.
+- Uses SimPy in the backend simulation engine to orchestrate day-step execution and make future event-process integration straightforward.
 - Event log and selection inspector.
 - Global Python script box + per-Analytics-node Python snippets (stored in graph state for backend execution workflows).
 - Scenario management:
@@ -61,5 +68,5 @@ State format changes
 - Simulation data model for `nodes`, `links`, and `shipments` remains unchanged.
 
 Notes
-- This is a front-end prototype, not a production scheduler.
+- This is a prototype, not a production scheduler.
 - The visual style is inspired by node-editor tools like ComfyUI, but it is an original implementation.
