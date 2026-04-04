@@ -15,6 +15,13 @@ How to run
 3. Start the server: `python -m backend.app`
 4. Open `http://localhost:5000` in your browser.
 
+Troubleshooting `Failed to fetch` / CORS in DevTools
+- If the app is opened as a local file (`file:///.../index.html`), browser requests to `/api/simulation/step` are blocked by CORS.
+- Preferred fix: always run the Flask server and open `http://localhost:5000` (same origin).
+- This app now auto-falls back to `http://localhost:5000/api/simulation` when loaded from `file://`.
+- You can also point the frontend to another backend origin by setting:
+  - `localStorage.setItem('supply-chain-flow-lab:api-base-url', 'http://YOUR_HOST:PORT')`
+
 What this draft does
 - ComfyUI-inspired dark node canvas.
 - Add Supplier, Warehouse, and Plant nodes.

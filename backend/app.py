@@ -11,6 +11,15 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 app = Flask(__name__, static_folder=str(ROOT_DIR), static_url_path="")
 
 
+@app.after_request
+def add_api_cors_headers(response):
+    if request.path.startswith("/api/"):
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+        response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+    return response
+
+
 @app.get("/")
 def index():
     return send_from_directory(ROOT_DIR, "index.html")
@@ -31,6 +40,11 @@ def simulation_step():
     except Exception as exc:  # noqa: BLE001
         return jsonify({"error": f"Simulation engine error: {exc}"}), 500
     return jsonify(result.payload)
+
+
+@app.route("/api/simulation/step", methods=["OPTIONS"])
+def simulation_step_options():
+    return ("", 204)
 
 
 if __name__ == "__main__":
