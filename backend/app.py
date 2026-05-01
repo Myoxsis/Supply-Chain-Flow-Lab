@@ -51,15 +51,53 @@ def static_assets(asset_path: str):
     return send_from_directory(ROOT_DIR, asset_path)
 
 
+def _validate_payload(payload: dict) -> list[str]:
+    errors: list[str] = []
+
+    required_keys = ["nodes", "links"]
+    for key in required_keys:
+        if key not in payload:
+            errors.append(f"Missing required field: {key}")
+
+    if "nodes" in payload and not isinstance(payload["nodes"], list):
+        errors.append("'nodes' must be a list")
+
+    if "links" in payload and not isinstance(payload["links"], list):
+        errors.append("'links' must be a list")
+
+    if "day" in payload and not isinstance(payload["day"], int):
+        errors.append("'day' must be an integer")
+
+    return errors
+
+
 @app.post("/api/simulation/step")
 def simulation_step():
     payload = request.get_json(silent=True)
+
     if not isinstance(payload, dict):
-        return jsonify({"error": "Expected a JSON object payload."}), 400
+        return jsonify({
+            "error": "Invalid payload",
+            "details": ["Expected a JSON object"]
+        }), 400
+
+    validation_errors = _validate_payload(payload)
+    if validation_errors:
+        return jsonify({
+            "error": "Invalid payload",
+            "details": validation_errors
+        }), 400
+
     try:
         result = simulate_day(payload)
-    except Exception as exc:  # noqa: BLE001
-        return jsonify({"error": f"Simulation engine error: {exc}"}), 500
+    except Exception:
+        # Avoid leaking internal errors unless debug mode is enabled
+        if app.debug:
+            raise
+        return jsonify({
+            "error": "Simulation engine error"
+        }), 500
+
     return jsonify(result.payload)
 
 
