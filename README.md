@@ -52,7 +52,7 @@ What this draft does
   - Versioned scenario schema with migration hooks.
 
 Scenario JSON versioning strategy
-- Current version: `6`.
+- Current version: `7`.
 - `migrateScenario()` upgrades old payloads to the latest format before import.
 - Version migration rules currently include:
   - v1 → v2: adds `globalPythonCode`, `ui`, and fills missing link fields with defaults.
@@ -60,7 +60,13 @@ Scenario JSON versioning strategy
   - v3 → v4: adds warehouse `preparationCapacityPerDay` (optional, defaults to unlimited).
   - v4 → v5: stores link flow type (`material` or `information`) explicitly.
   - v5 → v6: adds `nodePackage` (`SCFL-node`) for custom/community node type definitions.
+  - v6 → v7: adds UI/runtime compatibility fields for current canvas behavior. No simulation data model migration is required.
 - Future versions should add a new migration branch and keep previous branches intact for backward compatibility.
+
+Development notes
+- The Flask server runs with `debug=True` only when launched directly with `python -m backend.app`; use this for local development only.
+- Do not expose the development server directly on a public network.
+- API responses avoid exposing raw simulation exception details unless Flask debug mode is enabled.
 
 Keyboard shortcuts
 - Delete / Backspace: delete selected node(s) or selected link.
