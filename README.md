@@ -8,12 +8,18 @@ What is included
 - backend/app.py
 - backend/simulation_engine.py
 - requirements.txt
+- tests/
 
 How to run
 1. Install Python 3.10+.
 2. Install dependencies: `pip install -r requirements.txt`
 3. Start the server: `python -m backend.app`
 4. Open `http://localhost:5000` in your browser.
+
+Run tests
+```bash
+pytest
+```
 
 Troubleshooting `Failed to fetch` / CORS in DevTools
 - If the app is opened as a local file (`file:///.../index.html`), browser requests to `/api/simulation/step` are blocked by CORS.
@@ -61,7 +67,6 @@ Scenario JSON versioning strategy
   - v4 → v5: stores link flow type (`material` or `information`) explicitly.
   - v5 → v6: adds `nodePackage` (`SCFL-node`) for custom/community node type definitions.
   - v6 → v7: adds UI/runtime compatibility fields for current canvas behavior. No simulation data model migration is required.
-- Future versions should add a new migration branch and keep previous branches intact for backward compatibility.
 
 Development notes
 - The Flask server runs with `debug=True` only when launched directly with `python -m backend.app`; use this for local development only.
