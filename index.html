@@ -125,22 +125,12 @@
       </div>
 
       <section id="workspace" class="workspace">
-        <div id="nodeCreateToolbar" class="node-create-toolbar">
-          <button class="toolbar-action" data-node-type="supplier">+ Supplier</button>
-          <button class="toolbar-action" data-node-type="material">+ Material</button>
-          <button class="toolbar-action" data-node-type="warehouse">+ Warehouse</button>
-          <button class="toolbar-action" data-node-type="plant">+ Plant</button>
-        </div>
+        <div id="nodeCreateToolbar" class="node-create-toolbar"></div>
         <svg id="linksSvg" class="links" aria-hidden="true"></svg>
         <div id="tempWire" class="temp-wire-label hidden">Linking...</div>
         <div id="canvasContextMenu" class="canvas-context-menu hidden" role="menu" aria-label="Canvas actions">
           <input id="canvasContextSearch" type="search" placeholder="Filter actions..." aria-label="Filter canvas actions" />
-          <div class="canvas-context-actions">
-            <button class="context-action" data-node-type="supplier" role="menuitem">Add Supplier</button>
-            <button class="context-action" data-node-type="material" role="menuitem">Add Material</button>
-            <button class="context-action" data-node-type="warehouse" role="menuitem">Add Warehouse</button>
-            <button class="context-action" data-node-type="plant" role="menuitem">Add Plant</button>
-          </div>
+          <div class="canvas-context-actions"></div>
           <p class="context-empty hidden">No actions match.</p>
         </div>
       </section>
@@ -174,12 +164,10 @@
   <script src="frontend/coreNodes.js"></script>
   <script src="frontend/nodeRegistry.js"></script>
   <script src="frontend/simulationApi.js"></script>
-  <script src="frontend/appApiAdapter.js"></script>
   <script src="frontend/scenarioStorage.js"></script>
-  <script src="frontend/appScenarioAdapter.js"></script>
   <script src="frontend/validation.js"></script>
-  <script src="frontend/appValidationAdapter.js"></script>
   <script src="frontend/rendering.js"></script>
-  <script src="app.js"></script>
+  <script src="frontend/nodePackages.js"></script>
+  <script src="frontend/app/main.js"></script>
 </body>
 </html>
