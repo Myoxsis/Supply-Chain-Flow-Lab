@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "name": "example-supply-nodes",
+  "displayName": "Example Supply Nodes",
+  "version": "1.0.0",
+  "author": "SCFL",
+  "description": "Example plugin package with custom nodes.",
+  "nodes": [
+    {
+      "type": "demand-generator",
+      "label": "Demand Generator",
+      "category": "Demand",
+      "description": "Generates daily demand signals.",
+      "inputs": [],
+      "outputs": ["information"],
+      "fields": [
+        { "key": "name", "label": "Name", "type": "string", "defaultValue": "Demand Generator" },
+        { "key": "dailyDemand", "label": "Daily demand", "type": "int", "min": 0, "defaultValue": 50 }
+      ],
+      "runtime": {
+        "onTick": "function (ctx) { ctx.emit({ type: 'demand', value: ctx.node.dailyDemand }); }"
+      }
+    },
+    {
+      "type": "buffer-node",
+      "label": "Buffer",
+      "category": "Inventory",
+      "description": "Stores incoming flow and outputs at fixed rate.",
+      "inputs": ["material"],
+      "outputs": ["material"],
+      "fields": [
+        { "key": "name", "label": "Name", "type": "string", "defaultValue": "Buffer" },
+        { "key": "releaseRate", "label": "Release rate", "type": "int", "min": 0, "defaultValue": 20 }
+      ],
+      "runtime": {
+        "onTick": "function (ctx) { const available = ctx.state.inventory[ctx.node.id] || 0; const release = Math.min(available, ctx.node.releaseRate); ctx.state.inventory[ctx.node.id] = available - release; ctx.emit({ type: 'material', quantity: release }); }"
+      }
+    }
+  ]
+}

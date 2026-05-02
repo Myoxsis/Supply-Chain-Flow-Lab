@@ -1,90 +1,240 @@
-Supply Chain Flow Lab
-=====================
+# Supply Chain Flow Lab
 
-What is included
-- index.html
-- styles.css
-- app.js
-- backend/app.py
-- backend/simulation_engine.py
-- requirements.txt
-- tests/
+Supply Chain Flow Lab is a ComfyUI-inspired visual node editor for modeling, simulating, and extending supply-chain flows.
 
-How to run
-1. Install Python 3.10+.
-2. Install dependencies: `pip install -r requirements.txt`
-3. Start the server: `python -m backend.app`
-4. Open `http://localhost:5000` in your browser.
+The current frontend is a modular, plugin-driven graph runtime. Nodes are defined through a registry, rendered from schema, validated independently, and executed by a browser-side simulation engine.
 
-Run tests
+## What is included
+
+```text
+index.html
+styles.css
+frontend/
+  app/main.js
+  coreNodes.js
+  nodeRegistry.js
+  rendering.js
+  validation.js
+  scenarioStorage.js
+  nodePackages.js
+  pluginRuntime.js
+  simulationEngine.js
+  plugins/example-package.json
+backend/
+  app.py
+  simulation_engine.py
+requirements.txt
+tests/
+docs/modularization-roadmap.md
+```
+
+The Python backend remains in the repository for compatibility and future hybrid execution work, but the active branch now runs the primary simulation loop in the browser through `frontend/simulationEngine.js`.
+
+## How to run
+
+### Static frontend
+
+Open `index.html` directly in a browser, or serve the repository with any static file server.
+
+Example:
+
+```bash
+python -m http.server 8000
+```
+
+Then open:
+
+```text
+http://localhost:8000
+```
+
+### Backend compatibility mode
+
+The backend can still be started for legacy or future hybrid workflows:
+
+```bash
+pip install -r requirements.txt
+python -m backend.app
+```
+
+Then open:
+
+```text
+http://localhost:5000
+```
+
+## Run tests
+
 ```bash
 pytest
 ```
 
-Troubleshooting `Failed to fetch` / CORS in DevTools
-- If the app is opened as a local file (`file:///.../index.html`), browser requests to `/api/simulation/step` are blocked by CORS.
-- Preferred fix: always run the Flask server and open `http://localhost:5000` (same origin).
-- This app now auto-falls back to `http://localhost:5000/api/simulation` when loaded from `file://`.
-- You can also point the frontend to another backend origin by setting:
-  - `localStorage.setItem('supply-chain-flow-lab:api-base-url', 'http://YOUR_HOST:PORT')`
+## Current capabilities
 
-What this draft does
 - ComfyUI-inspired dark node canvas.
-- Add Supplier, Warehouse, and Plant nodes.
-- Add Analytics nodes that publish KPI cards from graph inputs.
-- Pan canvas with middle mouse or hold Space + drag.
-- Zoom with mouse wheel centered on cursor.
-- Box-select nodes by dragging empty canvas space.
-- Multi-select node drag with proper front-ordering.
-- Create links by dragging from output port to compatible input port.
-- Link preview while dragging and cancel with Escape.
-- Delete selected node(s)/link(s) with Delete or Backspace.
-- Duplicate selected node(s) with Ctrl/Cmd + D.
-- Fit graph to viewport with F or double-click on the canvas.
-- Simulate daily flows:
-  - Supplier ships on its delivery frequency.
-  - Warehouse stages outbound demand in a preparation queue.
-  - Warehouse dispatches only after preparation time and optional per-day preparation capacity.
-  - Plant consumes at its consumption rate.
-- Runs simulation ticks on a Python backend (Flask API) so the UI remains unchanged while execution is server-managed.
-- Uses SimPy in the backend simulation engine to orchestrate day-step execution and make future event-process integration straightforward.
-- Event log and selection inspector.
-- Global Python script box + per-Analytics-node Python snippets (stored in graph state for backend execution workflows).
-- Scenario management:
-  - Auto-saves current scenario to localStorage.
-  - Import/export scenario JSON.
-  - SCFL-node package manager to import/export community node definitions.
-  - Built-in presets: Blank + Demo.
-  - Versioned scenario schema with migration hooks.
+- Schema-driven node rendering.
+- Registry-based built-in and community node definitions.
+- Browser-side plugin-driven simulation engine.
+- Import/export scenario JSON.
+- Import/export SCFL-node packages.
+- Runtime plugin hooks through `runtime.onTick`.
+- Visual node editor interactions:
+  - drag nodes
+  - create links through ports
+  - pan canvas
+  - zoom around cursor
+  - fit graph to viewport
+  - compact node mode
+  - lightweight minimap
+  - execution highlighting
+- Event log and node inspector.
+- Scenario autosave through localStorage.
 
-Scenario JSON versioning strategy
-- Current version: `7`.
-- `migrateScenario()` upgrades old payloads to the latest format before import.
-- Version migration rules currently include:
-  - v1 → v2: adds `globalPythonCode`, `ui`, and fills missing link fields with defaults.
-  - v2 → v3: normalizes UI flags (`showLinkLabels`, `allowWarehouseToWarehouse`, `allowPlantOutbound`).
-  - v3 → v4: adds warehouse `preparationCapacityPerDay` (optional, defaults to unlimited).
-  - v4 → v5: stores link flow type (`material` or `information`) explicitly.
-  - v5 → v6: adds `nodePackage` (`SCFL-node`) for custom/community node type definitions.
-  - v6 → v7: adds UI/runtime compatibility fields for current canvas behavior. No simulation data model migration is required.
+## Architecture
 
-Development notes
-- The Flask server runs with `debug=True` only when launched directly with `python -m backend.app`; use this for local development only.
-- Do not expose the development server directly on a public network.
-- API responses avoid exposing raw simulation exception details unless Flask debug mode is enabled.
+```text
+index.html
+  ↓
+frontend/app/main.js
+  ↓
+SCFL_NodeRegistry       node type definitions
+SCFL_Rendering          schema-driven UI rendering
+SCFL_Validation         node/link/graph validation
+SCFL_ScenarioStorage    local persistence and import/export
+SCFL_NodePackages       plugin package install/export
+SCFL_PluginRuntime      runtime hook compilation and execution
+SCFL_SimulationEngine   graph execution loop
+```
 
-Keyboard shortcuts
-- Delete / Backspace: delete selected node(s) or selected link.
-- Ctrl/Cmd + D: duplicate selected node(s).
-- F: fit graph to viewport.
-- Escape: cancel active link creation.
-- Space (hold) + drag: pan canvas.
+## Runtime flow
 
-State format changes
-- Runtime UI state now tracks multiple selections (`selectedNodeIds` and `selectedLinkIds`) instead of a single selected node id.
-- Runtime UI state now includes camera (`camera`) and node stacking (`z`) metadata for interaction rendering.
-- Simulation data model for `nodes`, `links`, and `shipments` remains unchanged.
+Each simulation tick runs through the local graph engine:
 
-Notes
-- This is a prototype, not a production scheduler.
+```text
+SimulationEngine.step(state)
+  → apply arrivals
+  → run plugin hooks
+  → run default supply-chain rules
+  → consume plant demand
+  → update KPIs and histories
+  → render graph
+```
+
+Plugin hooks run before default supply-chain rules, which allows plugin nodes to modify inventory, emit events, or create shipments.
+
+## SCFL-node plugin packages
+
+Node packages are JSON files that define additional node types.
+
+Example package shape:
+
+```json
+{
+  "schemaVersion": 1,
+  "name": "example-supply-nodes",
+  "displayName": "Example Supply Nodes",
+  "version": "1.0.0",
+  "author": "SCFL",
+  "description": "Example plugin package with custom nodes.",
+  "nodes": [
+    {
+      "type": "demand-generator",
+      "label": "Demand Generator",
+      "category": "Demand",
+      "inputs": [],
+      "outputs": ["information"],
+      "fields": [
+        { "key": "name", "label": "Name", "type": "string", "defaultValue": "Demand Generator" },
+        { "key": "dailyDemand", "label": "Daily demand", "type": "int", "min": 0, "defaultValue": 50 }
+      ],
+      "runtime": {
+        "onTick": "function (ctx) { ctx.emit({ type: 'demand', value: ctx.node.dailyDemand }); }"
+      }
+    }
+  ]
+}
+```
+
+An example package is available at:
+
+```text
+frontend/plugins/example-package.json
+```
+
+## Plugin runtime context
+
+A plugin `onTick` function receives a context object:
+
+```js
+function (ctx) {
+  ctx.log('Running custom node');
+  ctx.emit({ type: 'event', value: 1 });
+}
+```
+
+Available context fields and helpers:
+
+```text
+ctx.node              current node
+ctx.nodeDefinition    registry definition
+ctx.appState          full app state
+ctx.state             isolated mutable runtime state
+ctx.day               current simulation day
+ctx.emit(event)       emit event or shipment request
+ctx.log(message)      write plugin log message
+ctx.getInputs(type)   read upstream graph connections
+ctx.getOutputs(type)  read downstream graph connections
+```
+
+To create a shipment from a plugin, emit:
+
+```js
+ctx.emit({
+  type: 'shipment',
+  from: ctx.node.id,
+  to: 'target-node-id',
+  quantity: 25,
+  delayDays: 2
+});
+```
+
+## Security note
+
+Plugin runtime code is currently compiled from imported package JSON. This is powerful but should be treated as trusted-code execution.
+
+Do not import untrusted plugins in production deployments until plugin execution is sandboxed, for example through a Web Worker or a restricted DSL.
+
+## Scenario JSON versioning
+
+Current scenario version: `7`.
+
+Scenario exports include:
+
+```text
+nodes
+links
+shipments
+ui
+camera
+pluginEvents
+pluginLogs
+```
+
+The scenario storage module validates basic import shape and keeps the branch ready for migration hooks.
+
+## Development notes
+
+- `frontend/app/main.js` is now the active frontend entrypoint.
+- Legacy adapter files have been removed from the active branch.
+- `app.js` is no longer loaded by `index.html` on this branch.
 - The visual style is inspired by node-editor tools like ComfyUI, but it is an original implementation.
+- The project is still a prototype and should not yet be treated as a production scheduler.
+
+## Recommended next work
+
+- Add automated browser smoke tests.
+- Sandbox plugin runtime execution.
+- Move built-in supply-chain rules into built-in node runtime packages.
+- Add dependency-aware graph scheduler.
+- Add node execution trace and flow animations.
+- Add plugin compatibility metadata and permissions.
