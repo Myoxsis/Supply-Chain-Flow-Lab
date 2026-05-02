@@ -65,6 +65,8 @@
     stockoutEvents: [],
     inventoryHistoryByNode: {},
     transitHistory: [],
+    pluginEvents: [],
+    pluginLogs: [],
     nodePackage: { name: 'SCFL-node', customNodes: [] },
   };
 
@@ -183,6 +185,8 @@
     state.links = (scenario.links ?? []).map((link) => ({ linkType: 'material', priority: 1, ...link }));
     state.shipments = scenario.shipments ?? [];
     state.day = scenario.day ?? 0;
+    state.pluginEvents = scenario.pluginEvents ?? [];
+    state.pluginLogs = scenario.pluginLogs ?? [];
     state.selectedNodeIds = [];
     state.selectedLinkIds = [];
     state.nodeCounter = nextCounter(state.nodes, 'node');
@@ -213,6 +217,8 @@
       links: state.links,
       shipments: state.shipments,
       ui: state.ui,
+      pluginEvents: state.pluginEvents,
+      pluginLogs: state.pluginLogs,
     };
   }
 
@@ -472,10 +478,19 @@
     eventLog.innerHTML = state.eventLog.map((item) => `<div>${window.SCFL_Rendering.escapeHtml(item)}</div>`).join('');
   }
 
+  function runPluginTick() {
+    if (!window.SCFL_PluginRuntime) return;
+    const result = window.SCFL_PluginRuntime.runHook(state, 'onTick');
+    result.logs.forEach((entry) => log(`[Plugin:${entry.nodeId}] ${entry.message}`));
+    result.emitted.forEach((event) => log(`[Plugin:${event.nodeId}] emitted ${event.type ?? 'event'}.`));
+    result.errors.forEach((error) => log(`[Plugin:${error.nodeId}] ${error.message}`));
+  }
+
   async function stepSimulation() {
     if (state.simulation.tickInProgress) return;
     state.simulation.tickInProgress = true;
     try {
+      runPluginTick();
       const payload = exportState();
       const result = await window.SCFL_SimulationApi.stepSimulation(payload);
       state.day = result.day ?? state.day + 1;
@@ -516,6 +531,8 @@
   function resetSimulation() {
     state.day = 0;
     state.shipments = [];
+    state.pluginEvents = [];
+    state.pluginLogs = [];
     state.nodes.forEach((node) => {
       node.inventory = initialInventoryFor(node.type, node);
       node.received = 0;
@@ -582,11 +599,11 @@
       const file = event.target.files?.[0];
       if (!file) return;
       const result = window.SCFL_NodePackages.importPackage(await file.text());
-      log(result.ok ? 'Imported node package.' : result.error);
+      log(result.ok ? 'Imported node package.' : result.errors?.join(' ') ?? result.error);
       validateAndRender();
       event.target.value = '';
     });
-    exportNodePackageBtn?.addEventListener('click', () => download('scfl-node-package.json', window.SCFL_NodePackages.exportPackage([])));
+    exportNodePackageBtn?.addEventListener('click', () => download('scfl-node-packages.json', window.SCFL_NodePackages.exportAllPackages()));
 
     workspace.addEventListener('pointerdown', (event) => {
       if (event.target === workspace) {
@@ -622,7 +639,7 @@
     wireUi();
     const saved = window.SCFL_ScenarioStorage.load();
     loadScenario(saved?.nodes ? saved : presets.demo);
-    log('Modular frontend loaded. Legacy app.js is not used on this branch.');
+    log('Modular frontend loaded. Plugin runtime is enabled.');
   }
 
   boot();
