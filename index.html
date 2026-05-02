@@ -61,9 +61,8 @@
         <ul>
           <li>Drag nodes around the canvas.</li>
           <li>Click an output port, then an input port, to create a link.</li>
-          <li>Suppliers ship every <strong>delivery frequency</strong> days.</li>
-          <li>Plants consume inventory each day using <strong>consumption rate</strong>.</li>
-          <li>Warehouses dispatch to plants after <strong>prep + delivery</strong> days.</li>
+          <li>Scroll to zoom and drag empty canvas space to pan.</li>
+          <li>Plugins can add custom node types and runtime behavior.</li>
         </ul>
       </section>
 
@@ -112,17 +111,6 @@
           <button id="toggleCreateToolbar" class="ghost small">Quick add</button>
         </div>
       </header>
-      <div class="graph-edit-toolbar">
-        <button id="copySelectionBtn" class="ghost small">Copy</button>
-        <button id="pasteSelectionBtn" class="ghost small">Paste</button>
-        <button id="alignLeftBtn" class="ghost small">Align left</button>
-        <button id="alignRightBtn" class="ghost small">Align right</button>
-        <button id="alignTopBtn" class="ghost small">Align top</button>
-        <button id="alignBottomBtn" class="ghost small">Align bottom</button>
-        <button id="distributeHorizontalBtn" class="ghost small">Distribute H</button>
-        <button id="distributeVerticalBtn" class="ghost small">Distribute V</button>
-        <label class="inline-toggle"><input id="snapToGrid" type="checkbox" /> Snap to grid</label>
-      </div>
 
       <section id="workspace" class="workspace">
         <div id="nodeCreateToolbar" class="node-create-toolbar"></div>
@@ -163,11 +151,12 @@
 
   <script src="frontend/coreNodes.js"></script>
   <script src="frontend/nodeRegistry.js"></script>
-  <script src="frontend/simulationApi.js"></script>
   <script src="frontend/scenarioStorage.js"></script>
   <script src="frontend/validation.js"></script>
   <script src="frontend/rendering.js"></script>
   <script src="frontend/nodePackages.js"></script>
+  <script src="frontend/pluginRuntime.js"></script>
+  <script src="frontend/simulationEngine.js"></script>
   <script src="frontend/app/main.js"></script>
 </body>
 </html>
