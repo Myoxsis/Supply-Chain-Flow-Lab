@@ -478,32 +478,24 @@
     eventLog.innerHTML = state.eventLog.map((item) => `<div>${window.SCFL_Rendering.escapeHtml(item)}</div>`).join('');
   }
 
-  function runPluginTick() {
-    if (!window.SCFL_PluginRuntime) return;
-    const result = window.SCFL_PluginRuntime.runHook(state, 'onTick');
-    result.logs.forEach((entry) => log(`[Plugin:${entry.nodeId}] ${entry.message}`));
-    result.emitted.forEach((event) => log(`[Plugin:${event.nodeId}] emitted ${event.type ?? 'event'}.`));
-    result.errors.forEach((error) => log(`[Plugin:${error.nodeId}] ${error.message}`));
-  }
-
   async function stepSimulation() {
     if (state.simulation.tickInProgress) return;
     state.simulation.tickInProgress = true;
     try {
-      runPluginTick();
-      const payload = exportState();
-      const result = await window.SCFL_SimulationApi.stepSimulation(payload);
-      state.day = result.day ?? state.day + 1;
-      state.nodes = (result.nodes ?? state.nodes).map(normalizeNode);
-      state.links = result.links ?? state.links;
-      state.shipments = result.shipments ?? [];
-      state.kpis = result.kpis ?? {};
-      state.deliveryStats = result.deliveryStats ?? {};
-      state.shipmentsByDay = result.shipmentsByDay ?? [];
-      state.shipmentsByDayBySourceNode = result.shipmentsByDayBySourceNode ?? {};
-      state.stockoutEvents = result.stockoutEvents ?? [];
-      state.inventoryHistoryByNode = result.inventoryHistoryByNode ?? {};
-      state.transitHistory = result.transitHistory ?? [];
+      const result = window.SCFL_SimulationEngine.step(state);
+      state.day = result.day;
+      state.nodes = result.nodes.map(normalizeNode);
+      state.links = result.links;
+      state.shipments = result.shipments;
+      state.kpis = result.kpis;
+      state.deliveryStats = result.deliveryStats;
+      state.shipmentsByDay = result.shipmentsByDay;
+      state.shipmentsByDayBySourceNode = result.shipmentsByDayBySourceNode;
+      state.stockoutEvents = result.stockoutEvents;
+      state.inventoryHistoryByNode = result.inventoryHistoryByNode;
+      state.transitHistory = result.transitHistory;
+      state.pluginEvents = result.pluginEvents;
+      state.pluginLogs = result.pluginLogs;
       (result.events ?? []).forEach(log);
       validateAndRender();
     } catch (error) {
@@ -639,7 +631,7 @@
     wireUi();
     const saved = window.SCFL_ScenarioStorage.load();
     loadScenario(saved?.nodes ? saved : presets.demo);
-    log('Modular frontend loaded. Plugin runtime is enabled.');
+    log('Modular frontend loaded. Simulation is fully plugin-driven.');
   }
 
   boot();
