@@ -1,63 +1,149 @@
-window.SCFL_ScenarioStorage = (function () {
-  const STORAGE_KEY = 'supply-chain-flow-lab:scenario';
-  const SCENARIO_VERSION = 7;
-
-  function serialize(scenario) {
-    return JSON.stringify(scenario, null, 2);
-  }
-
+window.SCFL_ScenarioStorage = (() => {
+  const STORAGE_KEY = "supply-chain-flow-lab:scenario",
+    SCENARIO_VERSION = 8;
+  let lastError = "";
+  const serialize = (value) =>
+    JSON.stringify(value, (_k, v) => (v === Infinity ? "__Infinity__" : v), 2);
   function parse(raw) {
-    if (!raw) return null;
     try {
-      return JSON.parse(raw);
+      return JSON.parse(raw, (_k, v) => (v === "__Infinity__" ? Infinity : v));
     } catch {
       return null;
     }
   }
-
-  function save(state) {
-    localStorage.setItem(STORAGE_KEY, serialize(state));
-  }
-
-  function load() {
-    return parse(localStorage.getItem(STORAGE_KEY));
-  }
-
-  function clear() {
-    localStorage.removeItem(STORAGE_KEY);
-  }
-
-  function exportScenario(state) {
-    return serialize({
-      version: SCENARIO_VERSION,
-      exportedAt: new Date().toISOString(),
-      ...state,
-    });
-  }
-
   function importScenario(raw) {
-    const parsed = typeof raw === 'string' ? parse(raw) : raw;
-    if (!parsed || typeof parsed !== 'object') {
-      return { ok: false, error: 'Scenario JSON must be an object.' };
+    const value = typeof raw === "string" ? parse(raw) : raw;
+    const fail = (error) => ({ ok: false, error });
+    if (!value || typeof value !== "object" || Array.isArray(value))
+      return fail("Scenario must be an object.");
+    if (!Array.isArray(value.nodes) || !Array.isArray(value.links))
+      return fail("Scenario needs nodes and links arrays.");
+    if (
+      !Number.isInteger(value.version ?? 1) ||
+      (value.version ?? 1) < 1 ||
+      value.version > SCENARIO_VERSION
+    )
+      return fail("Unsupported scenario version.");
+    if (value.nodes.length > 5000 || value.links.length > 20000)
+      return fail("Scenario exceeds size limits.");
+    const ids = new Set(),
+      links = new Set();
+    for (const node of value.nodes) {
+      if (!node || typeof node.id !== "string" || !node.id || ids.has(node.id))
+        return fail("Missing or duplicate node ID.");
+      if (!window.SCFL_NodeRegistry.get(node.type))
+        return fail(`Install the package for node type: ${node.type}.`);
+      if (
+        ![
+          node.x ?? node.position?.x ?? 0,
+          node.y ?? node.position?.y ?? 0,
+        ].every(Number.isFinite)
+      )
+        return fail("Node coordinates must be finite.");
+      ids.add(node.id);
     }
-    if (!Array.isArray(parsed.nodes)) {
-      return { ok: false, error: 'Scenario must include a nodes array.' };
+    for (const link of value.links) {
+      if (
+        !link ||
+        typeof link.id !== "string" ||
+        links.has(link.id) ||
+        !ids.has(link.from) ||
+        !ids.has(link.to)
+      )
+        return fail("Invalid link ID or endpoint.");
+      if (
+        !Number.isInteger(link.transportDelayDays) ||
+        link.transportDelayDays < 0 ||
+        !Number.isFinite(link.maxDailyCapacity) ||
+        link.maxDailyCapacity < 1
+      )
+        return fail("Invalid link delay or capacity.");
+      links.add(link.id);
     }
-    if (!Array.isArray(parsed.links)) {
-      return { ok: false, error: 'Scenario must include a links array.' };
-    }
-    return { ok: true, scenario: parsed };
+    if (
+      value.camera &&
+      (![value.camera.x, value.camera.y, value.camera.zoom].every(
+        Number.isFinite,
+      ) ||
+        value.camera.zoom <= 0)
+    )
+      return fail("Invalid camera.");
+    if (!Number.isInteger(value.day ?? 0) || (value.day ?? 0) < 0)
+      return fail("Invalid simulation day.");
+    if (
+      value.shipments != null &&
+      (!Array.isArray(value.shipments) ||
+        value.shipments.some(
+          (s) =>
+            !s ||
+            !ids.has(s.from) ||
+            !ids.has(s.to) ||
+            !Number.isFinite(s.qty) ||
+            s.qty <= 0 ||
+            !Number.isFinite(s.arrivalDay),
+        ))
+    )
+      return fail("Invalid shipment.");
+    // Versions 1–7 used the same graph arrays; normalize missing runtime metadata.
+    return {
+      ok: true,
+      scenario: {
+        ...value,
+        version: SCENARIO_VERSION,
+        shipments: value.shipments ?? [],
+        ui: value.ui ?? {},
+      },
+    };
   }
-
+  function save(state) {
+    try {
+      const previous = localStorage.getItem(STORAGE_KEY);
+      if (previous && importScenario(previous).ok)
+        localStorage.setItem(STORAGE_KEY + ":backup", previous);
+      localStorage.setItem(STORAGE_KEY, serialize(state));
+      lastError = "";
+      return { ok: true };
+    } catch {
+      lastError = "Autosave unavailable. Export JSON to keep your work.";
+      return { ok: false, error: lastError };
+    }
+  }
+  function load() {
+    try {
+      for (const key of [STORAGE_KEY, STORAGE_KEY + ":backup"]) {
+        const raw = localStorage.getItem(key);
+        if (!raw) continue;
+        const result = importScenario(raw);
+        if (result.ok) return result.scenario;
+        lastError = result.error;
+      }
+    } catch {
+      lastError = "Browser storage unavailable.";
+    }
+    return null;
+  }
   return {
     STORAGE_KEY,
     SCENARIO_VERSION,
     serialize,
     parse,
+    importScenario,
     save,
     load,
-    clear,
-    exportScenario,
-    importScenario,
+    get lastError() {
+      return lastError;
+    },
+    clear() {
+      try {
+        localStorage.removeItem(STORAGE_KEY);
+      } catch {}
+    },
+    exportScenario(state) {
+      return serialize({
+        ...state,
+        version: SCENARIO_VERSION,
+        exportedAt: new Date().toISOString(),
+      });
+    },
   };
 })();

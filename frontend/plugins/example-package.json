@@ -12,13 +12,32 @@
       "category": "Demand",
       "description": "Generates daily demand signals.",
       "inputs": [],
-      "outputs": ["information"],
+      "outputs": [
+        "information"
+      ],
       "fields": [
-        { "key": "name", "label": "Name", "type": "string", "defaultValue": "Demand Generator" },
-        { "key": "dailyDemand", "label": "Daily demand", "type": "int", "min": 0, "defaultValue": 50 }
+        {
+          "key": "name",
+          "label": "Name",
+          "type": "string",
+          "defaultValue": "Demand Generator"
+        },
+        {
+          "key": "dailyDemand",
+          "label": "Daily demand",
+          "type": "int",
+          "min": 0,
+          "defaultValue": 50
+        }
       ],
       "runtime": {
-        "onTick": "function (ctx) { ctx.emit({ type: 'demand', value: ctx.node.dailyDemand }); }"
+        "onTick": [
+          {
+            "action": "emit",
+            "type": "demand",
+            "valueField": "dailyDemand"
+          }
+        ]
       }
     },
     {
@@ -26,14 +45,35 @@
       "label": "Buffer",
       "category": "Inventory",
       "description": "Stores incoming flow and outputs at fixed rate.",
-      "inputs": ["material"],
-      "outputs": ["material"],
+      "inputs": [
+        "material"
+      ],
+      "outputs": [
+        "material"
+      ],
       "fields": [
-        { "key": "name", "label": "Name", "type": "string", "defaultValue": "Buffer" },
-        { "key": "releaseRate", "label": "Release rate", "type": "int", "min": 0, "defaultValue": 20 }
+        {
+          "key": "name",
+          "label": "Name",
+          "type": "string",
+          "defaultValue": "Buffer"
+        },
+        {
+          "key": "releaseRate",
+          "label": "Release rate",
+          "type": "int",
+          "min": 0,
+          "defaultValue": 20
+        }
       ],
       "runtime": {
-        "onTick": "function (ctx) { const available = ctx.state.inventory[ctx.node.id] || 0; const release = Math.min(available, ctx.node.releaseRate); ctx.state.inventory[ctx.node.id] = available - release; ctx.emit({ type: 'material', quantity: release }); }"
+        "onTick": [
+          {
+            "action": "emit",
+            "type": "demand",
+            "valueField": "dailyDemand"
+          }
+        ]
       }
     }
   ]
