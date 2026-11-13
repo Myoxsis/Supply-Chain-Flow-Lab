@@ -74,10 +74,10 @@ pytest
 - ComfyUI-inspired dark node canvas.
 - Schema-driven node rendering.
 - Registry-based built-in and community node definitions.
-- Browser-side plugin-driven simulation engine.
+- Browser-side simulation engine with declarative plugin commands.
 - Import/export scenario JSON.
 - Import/export SCFL-node packages.
-- Runtime plugin hooks through `runtime.onTick`.
+- Bounded declarative plugin commands through `runtime.onTick`.
 - Visual node editor interactions:
   - drag nodes
   - create links through ports
@@ -148,7 +148,7 @@ Example package shape:
         { "key": "dailyDemand", "label": "Daily demand", "type": "int", "min": 0, "defaultValue": 50 }
       ],
       "runtime": {
-        "onTick": "function (ctx) { ctx.emit({ type: 'demand', value: ctx.node.dailyDemand }); }"
+        "onTick": [{"action": "emit", "type": "demand", "valueField": "dailyDemand"}]
       }
     }
   ]
@@ -161,52 +161,17 @@ An example package is available at:
 frontend/plugins/example-package.json
 ```
 
-## Plugin runtime context
+## Plugin execution
 
-A plugin `onTick` function receives a context object:
+Imported JavaScript hooks are disabled. Runtime hooks now contain up to 100 declarative commands per node per tick. Supported actions are `emit`, `shipment`, and `log`; they have no DOM, network, or arbitrary app-state access. Shipment commands pass through the same stock, link, and warehouse capacity checks as built-in rules. Migrate legacy string hooks to command arrays before importing them.
 
-```js
-function (ctx) {
-  ctx.log('Running custom node');
-  ctx.emit({ type: 'event', value: 1 });
-}
+```json
+{"onTick": [{"action": "emit", "type": "demand", "valueField": "dailyDemand"}]}
 ```
-
-Available context fields and helpers:
-
-```text
-ctx.node              current node
-ctx.nodeDefinition    registry definition
-ctx.appState          full app state
-ctx.state             isolated mutable runtime state
-ctx.day               current simulation day
-ctx.emit(event)       emit event or shipment request
-ctx.log(message)      write plugin log message
-ctx.getInputs(type)   read upstream graph connections
-ctx.getOutputs(type)  read downstream graph connections
-```
-
-To create a shipment from a plugin, emit:
-
-```js
-ctx.emit({
-  type: 'shipment',
-  from: ctx.node.id,
-  to: 'target-node-id',
-  quantity: 25,
-  delayDays: 2
-});
-```
-
-## Security note
-
-Plugin runtime code is currently compiled from imported package JSON. This is powerful but should be treated as trusted-code execution.
-
-Do not import untrusted plugins in production deployments until plugin execution is sandboxed, for example through a Web Worker or a restricted DSL.
 
 ## Scenario JSON versioning
 
-Current scenario version: `7`.
+Current scenario version: `8`. Versions 1–7 are migrated on import; newer unsupported versions are rejected.
 
 Scenario exports include:
 
@@ -232,9 +197,37 @@ The scenario storage module validates basic import shape and keeps the branch re
 
 ## Recommended next work
 
-- Add automated browser smoke tests.
-- Sandbox plugin runtime execution.
 - Move built-in supply-chain rules into built-in node runtime packages.
 - Add dependency-aware graph scheduler.
 - Add node execution trace and flow animations.
 - Add plugin compatibility metadata and permissions.
+
+
+## Reliability and editor improvements
+
+- Undo/redo (Ctrl/Cmd+Z, Shift+Ctrl/Cmd+Z), duplicate selection (Ctrl/Cmd+D), select all (Ctrl/Cmd+A), Shift selection and group dragging, Delete and Escape.
+- Changes to fields commit on change so editing does not recreate the focused input on every keystroke.
+- Scenario imports validate IDs, endpoints, timing, camera and versions before replacing the current graph. Infinity survives export/import. Autosave keeps a previous valid copy; failures appear beside scenario controls.
+- Results panel includes service level (fulfilled units / demand), unmet demand, shipment cost, stockouts, inventory/demand charts, current link utilization and a captured baseline for comparison. Baselines last for the current browser session.
+
+### Browser simulation semantics
+
+A tick advances the day, receives due shipments, applies plugin commands, dispatches default flows, receives same-day shipments, then consumes plant demand. Link priority (lowest first) breaks allocation ties. All dispatches debit finite inventory and share per-day link and warehouse preparation capacity.
+
+Arrival delay is link transport time plus supplier lead time, or warehouse preparation time plus warehouse delivery time. These are additive. Warehouse preparation reserves inventory immediately; preparation and transit are represented by the scheduled shipment. The legacy Python compatibility engine retains its existing queue implementation.
+
+Supplier deliveries obey frequency and warehouse reorder points using on-hand plus incoming stock. Warehouse-to-plant replenishment targets safety stock and subtracts incoming stock. Overflow is logged and discarded. Custom material links are validated against registry ports; built-in topology restrictions still apply. Histories are bounded while cumulative KPIs remain totals.
+
+### Verification
+
+```bash
+python -m pytest
+npm ci
+npm test
+npx playwright install chromium
+python -m http.server 8000
+# In another terminal:
+npm run test:browser
+```
+
+Frontend regressions run with Node's built-in test runner. The Playwright smoke test checks create, duplicate, undo/redo, stepping, reload and invalid import without browser errors. CI runs both suites.

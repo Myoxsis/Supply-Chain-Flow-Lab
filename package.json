@@ -1,0 +1,11 @@
+{
+  "name": "supply-chain-flow-lab",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/frontend/*.test.cjs",
+    "test:browser": "node tests/frontend/browser.cjs"
+  },
+  "devDependencies": {
+    "playwright": "1.58.2"
+  }
+}

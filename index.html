@@ -18,7 +18,7 @@
       </div>
 
       <section class="panel">
-        <h2>Build</h2>
+        <h2>Build</h2><div class="button-grid"><button id="undoBtn">Undo</button><button id="redoBtn">Redo</button><button id="duplicateBtn">Duplicate</button></div><p class="panel-note">Shift-click to select multiple nodes. Ctrl/Cmd + Z to undo, + D to duplicate, + A to select all. Delete removes selection.</p>
         <div class="button-grid">
           <button id="addMaterial">+ Material</button>
           <button id="addSupplier">+ Supplier</button>
@@ -41,7 +41,7 @@
       </section>
 
       <section class="panel">
-        <h2>Scenario</h2>
+        <h2>Scenario</h2><p id="saveStatus" role="status"></p>
         <label for="scenarioPreset">Preset</label>
         <select id="scenarioPreset">
           <option value="blank">Blank</option>
@@ -74,7 +74,7 @@
       </section>
 
       <section class="panel inspector-panel">
-        <h2>Inspector</h2>
+        <h2>Inspector</h2><p id="connectionFeedback" role="alert"></p>
         <div id="selectionPanel" class="empty-state">Select a node to inspect it.</div>
       </section>
     </aside>
@@ -123,7 +123,7 @@
         </div>
       </section>
 
-      <footer class="event-log-wrap">
+      <details class="results-panel"><summary>Results and scenario comparison</summary><div id="results"></div></details><footer class="event-log-wrap">
         <div class="log-header">
           <h3>Event Log</h3>
           <button id="clearLogBtn" class="ghost small">Clear log</button>
@@ -157,6 +157,8 @@
   <script src="frontend/nodePackages.js"></script>
   <script src="frontend/pluginRuntime.js"></script>
   <script src="frontend/simulationEngine.js"></script>
+  <script src="frontend/dashboard.js"></script>
   <script src="frontend/app/main.js"></script>
 </body>
 </html>
+

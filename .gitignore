@@ -39,3 +39,10 @@ node_modules/
 # Misc
 *.swp
 *.swo
+
+
+node_modules/
+.test-deps/
+.tmp/
+.browsers/
+browser-check.png

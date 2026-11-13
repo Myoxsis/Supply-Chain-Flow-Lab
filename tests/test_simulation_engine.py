@@ -160,7 +160,7 @@ def test_warehouse_preparation_queue_respects_daily_capacity() -> None:
     links = [
         material_link(
             id="link-warehouse-plant",
-            from="warehouse-1",
+            **{"from": "warehouse-1"},
             to="plant-1",
             transportDelayDays=0,
             maxDailyCapacity=100,
@@ -216,7 +216,7 @@ def test_kpis_track_shipped_volume_stockouts_queue_time_and_cost() -> None:
     links = [
         material_link(
             id="link-warehouse-plant",
-            from="warehouse-1",
+            **{"from": "warehouse-1"},
             to="plant-1",
             transportDelayDays=0,
             maxDailyCapacity=100,
@@ -235,3 +235,4 @@ def test_kpis_track_shipped_volume_stockouts_queue_time_and_cost() -> None:
     assert kpis["totalShipmentCost"] == 12.5
     assert kpis["averageQueueTimeDays"] == 0
     assert kpis["onTimeDeliveries"]["total"] == 1
+
