@@ -7,6 +7,7 @@ window.SCFL_Validation = (function () {
     const value = node[field.key];
     const errors = [];
 
+    if (field.type === "json") return errors;
     if (field.type === "string" || field.type === "text") {
       if (field.required && (!value || !String(value).trim())) {
         errors.push(`${field.label} is required.`);
@@ -14,7 +15,11 @@ window.SCFL_Validation = (function () {
       return errors;
     }
 
-    if (field.type === "select" || field.type === "select_analytics_source") {
+    if (
+      field.type === "select" ||
+      field.type === "select_analytics_source" ||
+      field.type === "select_material"
+    ) {
       if (field.required && !value) {
         errors.push(`${field.label} is required.`);
         return errors;
@@ -119,7 +124,10 @@ window.SCFL_Validation = (function () {
 
   function validateLink(link, nodes, ui = {}) {
     const errors = [];
-    const byId = new Map(nodes.map((node) => [node.id, node]));
+    const byId =
+      nodes instanceof Map
+        ? nodes
+        : new Map(nodes.map((node) => [node.id, node]));
     const from = byId.get(link.from);
     const to = byId.get(link.to);
 
@@ -158,6 +166,7 @@ window.SCFL_Validation = (function () {
 
   function validateGraph(state, schemaResolver, optionsResolver) {
     const graphErrors = [];
+    const nodes = new Map(state.nodes.map((n) => [n.id, n]));
     const nodeErrors = new Map();
     const linkErrors = new Map();
 
@@ -169,7 +178,7 @@ window.SCFL_Validation = (function () {
     });
 
     state.links.forEach((link) => {
-      const errors = validateLink(link, state.nodes, state.ui ?? {});
+      const errors = validateLink(link, nodes, state.ui ?? {});
       linkErrors.set(link.id, toErrorMap(errors));
       if (errors.length)
         graphErrors.push(`Invalid link ${link.id}: ${errors.join(" ")}`);

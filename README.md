@@ -102,7 +102,7 @@ SCFL_Rendering          schema-driven UI rendering
 SCFL_Validation         node/link/graph validation
 SCFL_ScenarioStorage    local persistence and import/export
 SCFL_NodePackages       plugin package install/export
-SCFL_PluginRuntime      runtime hook compilation and execution
+SCFL_PluginRuntime      bounded declarative commands
 SCFL_SimulationEngine   graph execution loop
 ```
 
@@ -120,7 +120,7 @@ SimulationEngine.step(state)
   → render graph
 ```
 
-Plugin hooks run before default supply-chain rules, which allows plugin nodes to modify inventory, emit events, or create shipments.
+Plugin commands run before default supply-chain rules. They emit events or request shipments through the same stock and capacity checks as built-in nodes.
 
 ## SCFL-node plugin packages
 
@@ -171,7 +171,7 @@ Imported JavaScript hooks are disabled. Runtime hooks now contain up to 100 decl
 
 ## Scenario JSON versioning
 
-Current scenario version: `8`. Versions 1–7 are migrated on import; newer unsupported versions are rejected.
+Current scenario version: `9`. Versions 1–8 retain legacy default-material stock on import; newer unsupported versions are rejected.
 
 Scenario exports include:
 
@@ -208,15 +208,17 @@ The scenario storage module validates basic import shape and keeps the branch re
 - Undo/redo (Ctrl/Cmd+Z, Shift+Ctrl/Cmd+Z), duplicate selection (Ctrl/Cmd+D), select all (Ctrl/Cmd+A), Shift selection and group dragging, Delete and Escape.
 - Changes to fields commit on change so editing does not recreate the focused input on every keystroke.
 - Scenario imports validate IDs, endpoints, timing, camera and versions before replacing the current graph. Infinity survives export/import. Autosave keeps a previous valid copy; failures appear beside scenario controls.
-- Results panel includes service level (fulfilled units / demand), unmet demand, shipment cost, stockouts, inventory/demand charts, current link utilization and a captured baseline for comparison. Baselines last for the current browser session.
+- Results panel includes service level (fulfilled units / demand), unmet demand, shipment cost, stockouts, inventory/demand charts, current link utilization and a captured baseline for comparison. Baselines and named experiment results persist across reloads.
 
 ### Browser simulation semantics
 
-A tick advances the day, receives due shipments, applies plugin commands, dispatches default flows, receives same-day shipments, then consumes plant demand. Link priority (lowest first) breaks allocation ties. All dispatches debit finite inventory and share per-day link and warehouse preparation capacity.
+The browser engine now uses material-specific ledgers, production recipes and explicit warehouse queues. Existing scalar scenarios retain one `default` material; material labels are never silently interpreted as material IDs. Existing in-flight shipment arrival dates are preserved.
 
-Arrival delay is link transport time plus supplier lead time, or warehouse preparation time plus warehouse delivery time. These are additive. Warehouse preparation reserves inventory immediately; preparation and transit are represented by the scheduled shipment. The legacy Python compatibility engine retains its existing queue implementation.
+A day receives due shipments, applies plugin commands, requests replenishment, reserves warehouse preparation stock, dispatches ready orders, receives same-day deliveries, then produces and consumes plant demand. Equal-priority allocations use stable link IDs. Warehouse orders progress through waiting, preparing, ready and in-transit stages; only preparing stock is reserved.
 
-Supplier deliveries obey frequency and warehouse reorder points using on-hand plus incoming stock. Warehouse-to-plant replenishment targets safety stock and subtracts incoming stock. Overflow is logged and discarded. Custom material links are validated against registry ports; built-in topology restrictions still apply. Histories are bounded while cumulative KPIs remain totals.
+Link transport, supplier lead time, warehouse preparation and delivery times remain additive. Preparation capacity limits units started per day, while route capacity limits units dispatched per day. Outages, capacity multipliers and extra delays have explicit day ranges. The browser engine is the authoritative engine for the scenario lab; Python compatibility mode retains its legacy scalar inventory and queue semantics.
+
+See [Scenario lab guide](docs/scenario-lab.md) for the walkthrough, schemas, migration behavior, experiment limits and CSV formats.
 
 ### Verification
 
@@ -231,3 +233,14 @@ npm run test:browser
 ```
 
 Frontend regressions run with Node's built-in test runner. The Playwright smoke test checks create, duplicate, undo/redo, stepping, reload and invalid import without browser errors. CI runs both suites.
+
+## Scenario lab
+
+- Stock by material, production recipes, production capacity and per-material routes.
+- Seasonal demand multipliers, exact daily demand schedules, supplier/route outages, capacity reductions and extra delays.
+- Named variants and 1–365 day batch comparisons, with progress, cancellation and persistent results. Long runs execute in a worker when available; opening the app directly from a file uses a cooperative fallback.
+- Clickable event explanations and explicit waiting/preparing/ready/transit quantities.
+- Guided production example, node/demand CSV import and node/result CSV export.
+- Indexed runtime lookups, cached node cards and link geometry, and charts rendered only while Results is open.
+
+The tests cover material/recipe balances, queue conservation, competing route allocation, disruptions, migration, CSV, repeatable batch runs, cancellation and browser worker execution.

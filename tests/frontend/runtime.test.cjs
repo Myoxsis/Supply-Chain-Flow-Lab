@@ -15,6 +15,8 @@ function env() {
   };
   vm.createContext(c);
   for (const f of [
+    "materials",
+    "modelValidation",
     "coreNodes",
     "nodeRegistry",
     "validation",
@@ -87,7 +89,10 @@ test("preparation capacity is shared across outbound links and timing is additiv
   };
   s.nodes[1].safetyStock = 50;
   c.window.SCFL_SimulationEngine.step(s);
-  assert.equal(s.shipments[0].qty, 5);
+  assert.equal(s.nodes[0].preparingShipments[0].qty, 5);
+  assert.equal(s.nodes[0].preparingShipments[0].readyDay, 3);
+  c.window.SCFL_SimulationEngine.step(s);
+  c.window.SCFL_SimulationEngine.step(s);
   assert.equal(s.shipments[0].arrivalDay, 4);
 });
 test("incoming stock prevents duplicate plant replenishment", () => {
@@ -120,6 +125,7 @@ test("supplier lead time and warehouse reorder point are honored", () => {
   c.window.SCFL_SimulationEngine.step(s);
   assert.equal(s.shipments.length, 0);
   s.nodes[1].inventory = 0;
+  s.nodes[1].inventoryByMaterial.default = 0;
   c.window.SCFL_SimulationEngine.step(s);
   assert.equal(s.shipments[0].arrivalDay, 4);
 });
