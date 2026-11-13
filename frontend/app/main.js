@@ -42,7 +42,7 @@
   const nodePackageList = document.getElementById("nodePackageList");
 
   const GRID_SIZE = 24;
-  const SCENARIO_VERSION = 8;
+  const SCENARIO_VERSION = 9;
 
   const graphLayer = document.createElement("div");
   graphLayer.className = "graph-layer";
@@ -101,6 +101,19 @@
 
   const linkSchema = [
     {
+      key: "materialId",
+      label: "Material carried",
+      type: "select_material",
+      defaultValue: "default",
+    },
+    {
+      key: "priority",
+      label: "Allocation priority (lowest first)",
+      type: "int",
+      min: 1,
+      defaultValue: 1,
+    },
+    {
       key: "transportDelayDays",
       label: "Transport delay (days)",
       type: "int",
@@ -130,6 +143,7 @@
   ];
 
   const presets = {
+    production: window.SCFL_Examples.production(),
     blank: { version: SCENARIO_VERSION, nodes: [], links: [], day: 0 },
     demo: {
       version: SCENARIO_VERSION,
@@ -298,6 +312,7 @@
       node.preparingShipments = [];
       node.nextQueueRequestId = 1;
     }
+    window.SCFL_Materials.initialize(node);
     state.nodes.push(node);
     selectNode(id);
     validateAndRender();
@@ -325,6 +340,7 @@
       node.preparingShipments = node.preparingShipments ?? [];
       node.nextQueueRequestId = node.nextQueueRequestId ?? 1;
     }
+    window.SCFL_Materials.initialize(node);
     return node;
   }
 
@@ -338,6 +354,9 @@
       ...link,
     }));
     state.shipments = scenario.shipments ?? [];
+    state.disruptions = scenario.disruptions ?? [];
+    state.trace = scenario.trace ?? [];
+    state.sequence = scenario.sequence ?? 0;
     state.day = scenario.day ?? 0;
     state.pluginEvents = scenario.pluginEvents ?? [];
     state.pluginLogs = scenario.pluginLogs ?? [];
@@ -365,6 +384,7 @@
       state.camera = scenario.camera;
       applyCamera();
     } else fitView(false);
+    window.dispatchEvent(new Event("scfl:scenario"));
     log(
       `Loaded scenario with ${state.nodes.length} nodes and ${state.links.length} links.`,
     );
@@ -447,6 +467,9 @@
   function exportState() {
     return {
       version: SCENARIO_VERSION,
+      disruptions: state.disruptions,
+      trace: state.trace,
+      sequence: state.sequence,
       day: state.day,
       nodes: state.nodes,
       links: state.links,
@@ -466,6 +489,7 @@
   }
 
   function validateAll() {
+    state.modelErrors = window.SCFL_ModelValidation.errors(exportState());
     state.nodes.forEach((node) => {
       node.validationErrors = window.SCFL_Validation.validateNode(
         node,
@@ -473,10 +497,11 @@
         { optionsResolver: getSelectableFieldOptions },
       );
     });
+    const nodeIndex = new Map(state.nodes.map((n) => [n.id, n]));
     state.links.forEach((link) => {
       const errors = window.SCFL_Validation.validateLink(
         link,
-        state.nodes,
+        nodeIndex,
         state.ui,
       );
       link.validationErrors = window.SCFL_Validation.toErrorMap(errors);
@@ -484,6 +509,13 @@
   }
 
   function getSelectableFieldOptions(node, field) {
+    if (field.type === "select_material")
+      return [
+        { value: "default", label: "Default (legacy stock)" },
+        ...state.nodes
+          .filter((n) => n.type === "material")
+          .map((n) => ({ value: n.id, label: `${n.name} (${n.id})` })),
+      ];
     if (field.type === "select_analytics_source")
       return state.nodes
         .filter((item) => item.id !== node.id)
@@ -499,7 +531,10 @@
   }
 
   function validateAndRender() {
+    window.SCFL_SimulationEngine.reconcile(state);
     validateAll();
+    document.getElementById("connectionFeedback").textContent =
+      state.modelErrors.join(" ");
     render();
     saveScenario();
   }
@@ -553,9 +588,34 @@
     }
   }
 
+  const cardCache = new Map();
   function renderNodes() {
-    graphLayer.querySelectorAll(".node-card").forEach((node) => node.remove());
+    const ids = new Set(state.nodes.map((n) => n.id));
+    for (const [id, entry] of cardCache)
+      if (!ids.has(id)) {
+        entry.element.remove();
+        cardCache.delete(id);
+      }
+    const materialSignature = state.nodes
+      .filter((n) => n.type === "material")
+      .map((n) => [n.id, n.name]);
     state.nodes.forEach((node) => {
+      const signature = JSON.stringify([
+        node,
+        state.ui.compactNodes,
+        state.selectedNodeIds.includes(node.id),
+        state.activeNodeIds.includes(node.id),
+        materialSignature,
+      ]);
+      const cached = cardCache.get(node.id);
+      if (
+        cached &&
+        cached.node === node &&
+        (cached.signature === signature ||
+          cached.element.contains(document.activeElement))
+      )
+        return;
+      cached?.element.remove();
       const fragment = nodeTemplate.content.cloneNode(true);
       const element = fragment.querySelector(".node-card");
       element.dataset.id = node.id;
@@ -588,6 +648,7 @@
       bindFieldEvents(element, node);
       bindNodeDrag(element, node);
       bindPorts(element, node);
+      cardCache.set(node.id, { node, signature, element });
       graphLayer.appendChild(fragment);
     });
   }
@@ -597,7 +658,15 @@
       input.addEventListener("change", (event) => {
         const key = event.target.dataset.field;
         const field = schema(node.type).fields.find((item) => item.key === key);
-        if (field?.type === "int" || field?.type === "number")
+        if (field?.type === "json") {
+          try {
+            node[key] = JSON.parse(event.target.value);
+          } catch {
+            document.getElementById("connectionFeedback").textContent =
+              "Invalid JSON: fix this field before applying.";
+            return;
+          }
+        } else if (field?.type === "int" || field?.type === "number")
           node[key] =
             event.target.value === "" ? null : Number(event.target.value);
         else if (field?.type === "multiselect_materials")
@@ -605,8 +674,15 @@
             (option) => option.value,
           );
         else node[key] = event.target.value;
-        if (key === "initialInventory")
-          node.inventory = initialInventoryFor(node.type, node);
+        if (
+          [
+            "initialInventory",
+            "initialInventoryByMaterial",
+            "materialId",
+          ].includes(key) &&
+          state.day === 0
+        )
+          window.SCFL_Materials.reset(node);
         validateAndRender();
       });
     });
@@ -718,11 +794,21 @@
     validateAndRender();
   }
 
+  let linkSignature = "";
   function renderLinks() {
+    const signature = JSON.stringify([
+      state.links,
+      state.nodes.map((n) => [n.id, n.x, n.y]),
+      state.activeNodeIds,
+      state.ui.showLinkLabels,
+    ]);
+    if (signature === linkSignature) return;
+    linkSignature = signature;
     linksSvg.innerHTML = "";
+    const byId = new Map(state.nodes.map((n) => [n.id, n]));
     state.links.forEach((link) => {
-      const from = getNode(link.from);
-      const to = getNode(link.to);
+      const from = byId.get(link.from);
+      const to = byId.get(link.to);
       if (!from || !to) return;
       const path = document.createElementNS(
         "http://www.w3.org/2000/svg",
@@ -762,23 +848,38 @@
   }
 
   function renderSelection() {
+    if (selectionPanel.contains(document.activeElement)) return;
     if (state.selectedNodeIds.length === 1) {
       const node = getNode(state.selectedNodeIds[0]);
       const issues = Object.values(node.validationErrors ?? {}).map(
         (message) => ({ message }),
       );
-      selectionPanel.innerHTML = `<div class="selection-summary"><h3>${window.SCFL_Rendering.escapeHtml(node.name)}</h3><p>${window.SCFL_Rendering.escapeHtml(schema(node.type).label)} · ${window.SCFL_Rendering.escapeHtml(node.id)}</p></div>${window.SCFL_Rendering.renderValidationIssues(issues)}`;
+      selectionPanel.innerHTML = `<div class="selection-summary"><h3>${window.SCFL_Rendering.escapeHtml(node.name)}</h3><p>${window.SCFL_Rendering.escapeHtml(schema(node.type).label)} · ${window.SCFL_Rendering.escapeHtml(node.id)}</p></div>${window.SCFL_Rendering.renderValidationIssues(issues)}<h4>Material stock</h4><pre>${window.SCFL_Rendering.escapeHtml(JSON.stringify(node.inventoryByMaterial ?? {}, null, 2))}</pre><p class="panel-note">Initial stock and recipes use material node IDs. Reset the simulation to apply changed initial stock.</p><details><summary>Advanced configuration JSON</summary>${schema(
+        node.type,
+      )
+        .fields.filter((f) => f.advanced)
+        .map((f) => window.SCFL_Rendering.renderField(f, node[f.key], ""))
+        .join("")}</details>`;
+      bindFieldEvents(selectionPanel, node);
+      window.SCFL_ModelEditor.mount(selectionPanel, node, state, () => {
+        pauseSimulation();
+        validateAndRender();
+      });
       return;
     }
     if (state.selectedLinkIds.length === 1) {
       const link = state.links.find(
         (item) => item.id === state.selectedLinkIds[0],
       );
-      selectionPanel.innerHTML = `<strong>${window.SCFL_Rendering.escapeHtml(link.id)}</strong><p>${window.SCFL_Rendering.escapeHtml(getNode(link.from)?.name)} → ${window.SCFL_Rendering.escapeHtml(getNode(link.to)?.name)}</p>${linkSchema.map((field) => window.SCFL_Rendering.renderField(field, link[field.key], "")).join("")}${window.SCFL_Rendering.renderValidationIssues(Object.values(link.validationErrors ?? {}))}`;
+      selectionPanel.innerHTML = `<strong>${window.SCFL_Rendering.escapeHtml(link.id)}</strong><p>${window.SCFL_Rendering.escapeHtml(getNode(link.from)?.name)} → ${window.SCFL_Rendering.escapeHtml(getNode(link.to)?.name)}</p>${linkSchema.map((field) => window.SCFL_Rendering.renderField(field, link[field.key] ?? field.defaultValue, "", getSelectableFieldOptions(null, field))).join("")}${window.SCFL_Rendering.renderValidationIssues(Object.values(link.validationErrors ?? {}))}`;
       selectionPanel.querySelectorAll("[data-field]").forEach((input) =>
         input.addEventListener("change", () => {
           link[input.dataset.field] =
-            input.value === "" ? null : Number(input.value);
+            input.dataset.field === "materialId"
+              ? input.value
+              : input.value === ""
+                ? null
+                : Number(input.value);
           validateAndRender();
         }),
       );
@@ -852,20 +953,27 @@
     if (state.simulation.tickInProgress) return;
     validateAll();
     if (
+      state.modelErrors.length ||
       state.nodes.some((n) => Object.keys(n.validationErrors).length) ||
       state.links.some((l) => Object.keys(l.validationErrors).length)
     ) {
-      log("Fix validation errors before running.");
+      log(
+        state.modelErrors.join(" ") || "Fix validation errors before running.",
+      );
       pauseSimulation();
       return;
     }
     state.simulation.tickInProgress = true;
     try {
-      state.activeNodeIds = state.nodes.map((node) => node.id);
-      render();
+      state.activeNodeIds = [];
       const result = window.SCFL_SimulationEngine.step(state);
       state.day = result.day;
-      state.nodes = result.nodes.map(normalizeNode);
+      state.nodes = result.nodes;
+      state.activeNodeIds = [
+        ...new Set(
+          state.trace.filter((t) => t.day === state.day).map((t) => t.nodeId),
+        ),
+      ];
       state.links = result.links;
       state.shipments = result.shipments;
       state.kpis = result.kpis;
@@ -893,10 +1001,13 @@
   function startSimulation() {
     validateAll();
     if (
+      state.modelErrors.length ||
       state.nodes.some((n) => Object.keys(n.validationErrors).length) ||
       state.links.some((l) => Object.keys(l.validationErrors).length)
     ) {
-      log("Fix validation errors before running.");
+      log(
+        state.modelErrors.join(" ") || "Fix validation errors before running.",
+      );
       return;
     }
     pauseSimulation();
@@ -915,30 +1026,13 @@
   }
   function resetSimulation() {
     pauseSimulation();
-    state.totals = { demand: 0, fulfilled: 0, cost: 0, shipped: 0 };
-    state.kpis = {};
-    state.stockoutEvents = [];
-    state.shipmentsByDay = [];
-    state.inventoryHistoryByNode = {};
-    state.transitHistory = [];
-    state.day = 0;
-    state.shipments = [];
-    state.pluginEvents = [];
-    state.pluginLogs = [];
-    state.nodes.forEach((node) => {
-      node.inventory = initialInventoryFor(node.type, node);
-      node.received = 0;
-      node.shipped = 0;
-      node.stockouts = 0;
-      if (node.type === "warehouse") {
-        node.preparationQueue = [];
-        node.preparingShipments = [];
-      }
-    });
+    window.SCFL_SimulationEngine.reset(state);
     validateAndRender();
   }
   function download(filename, content) {
-    const blob = new Blob([content], { type: "application/json" });
+    const blob = new Blob([content], {
+      type: filename.endsWith(".csv") ? "text/csv" : "application/json",
+    });
     const url = URL.createObjectURL(blob);
     const anchor = document.createElement("a");
     anchor.href = url;
@@ -1179,6 +1273,17 @@
   }
 
   function boot() {
+    window.SCFL_Workbench.mount({
+      state,
+      exportState,
+      loadScenario,
+      pause: pauseSimulation,
+      changed: validateAndRender,
+      download,
+    });
+    document
+      .querySelector(".results-panel")
+      .addEventListener("toggle", () => window.SCFL_Dashboard.render(state));
     window.state = state;
     wireUi();
     const saved = window.SCFL_ScenarioStorage.load();

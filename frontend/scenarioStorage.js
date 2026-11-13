@@ -1,6 +1,6 @@
 window.SCFL_ScenarioStorage = (() => {
   const STORAGE_KEY = "supply-chain-flow-lab:scenario",
-    SCENARIO_VERSION = 8;
+    SCENARIO_VERSION = 9;
   let lastError = "";
   const serialize = (value) =>
     JSON.stringify(value, (_k, v) => (v === Infinity ? "__Infinity__" : v), 2);
@@ -40,6 +40,17 @@ window.SCFL_ScenarioStorage = (() => {
         ].every(Number.isFinite)
       )
         return fail("Node coordinates must be finite.");
+      for (const field of window.SCFL_NodeRegistry.get(node.type).fields) {
+        const value = node[field.key];
+        if (
+          value != null &&
+          ["int", "number"].includes(field.type) &&
+          (!Number.isFinite(value) ||
+            (field.type === "int" && !Number.isInteger(value)) ||
+            (field.min != null && value < field.min))
+        )
+          return fail(`${node.id}: invalid ${field.key}.`);
+      }
       ids.add(node.id);
     }
     for (const link of value.links) {
@@ -84,7 +95,10 @@ window.SCFL_ScenarioStorage = (() => {
         ))
     )
       return fail("Invalid shipment.");
-    // Versions 1–7 used the same graph arrays; normalize missing runtime metadata.
+    const modelErrors = window.SCFL_ModelValidation?.errors(value) ?? [];
+    if (modelErrors.length) return fail(modelErrors.join(" "));
+    // Existing graphs keep a single default material; labels are never guessed as IDs.
+    // v8 shipments already include preparation time in arrivalDay: preserve in-flight dates.
     return {
       ok: true,
       scenario: {
